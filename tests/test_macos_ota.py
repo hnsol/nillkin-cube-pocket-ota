@@ -1,8 +1,11 @@
 import argparse
 import io
+import os
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -127,6 +130,95 @@ class PreflightEvaluationTests(unittest.TestCase):
 
 
 class ParserSafetyTests(unittest.TestCase):
+    def test_cli_accepts_show_transfer_plan(self):
+        args = ota.build_parser().parse_args(
+            ["--firmware", "fw.bin", "--show-transfer-plan"]
+        )
+
+        self.assertTrue(args.show_transfer_plan)
+
+    def test_show_transfer_plan_validates_file_without_starting_ble(self):
+        output = io.StringIO()
+        data = b"\x00" * approved_image().profile.size
+        with (
+            patch.object(Path, "read_bytes", return_value=data),
+            patch.object(
+                firmware_image, "validate_image", return_value=approved_image()
+            ) as validate,
+            patch.object(
+                ota,
+                "_run",
+                side_effect=AssertionError("BLE path must not run"),
+            ) as run,
+            redirect_stdout(output),
+        ):
+            status = ota.main(
+                ["--firmware", "fw.bin", "--show-transfer-plan"]
+            )
+
+        self.assertEqual(status, 0)
+        validate.assert_called_once_with(data)
+        run.assert_not_called()
+        rendered = output.getvalue()
+        self.assertIn(
+            "Target SHA-256: "
+            "00c87d252b639165963cc4452600672305043696d5fec7837b34b3dbed66957f",
+            rendered,
+        )
+        self.assertIn("Target size: 123916 bytes", rendered)
+        self.assertIn("Target full-file sum16: 0xEC27", rendered)
+        self.assertIn(
+            "0x27 init-new send: 27 0c e4 01 00 00 "
+            "(host→device; with response)",
+            rendered,
+        )
+        self.assertIn("0x27 state response: ff01 read (device→host)", rendered)
+        self.assertIn(
+            "0x25 object-create send: 実機0x27応答で決定 "
+            "(host→device; with response)",
+            rendered,
+        )
+        self.assertIn("0x25 object ACK: notify待ち (device→host)", rendered)
+        self.assertIn(
+            "raw payload send: 実機0x27応答で決定 "
+            "(host→device; without response)",
+            rendered,
+        )
+        self.assertIn("0x17 PRN ACK: notify待ち (device→host)", rendered)
+        self.assertIn(
+            "0x18 upgrade send: version[10]が未確定 "
+            "(host→device; with response)",
+            rendered,
+        )
+        self.assertIn("0x18 upgrade ACK: notify待ち (device→host)", rendered)
+        self.assertIn("0x22 reset send: 22 00 (host→device; without response)", rendered)
+        self.assertIn("Executable: no", rendered)
+        self.assertIn("version[10]が未確定", rendered)
+        self.assertIn("retransmit endpointが未確定", rendered)
+
+    def test_show_transfer_plan_module_import_does_not_import_bleak(self):
+        script = """
+import builtins
+
+original_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    if name == 'bleak':
+        raise RuntimeError('Bleak import is forbidden for transfer-plan mode')
+    return original_import(name, *args, **kwargs)
+
+builtins.__import__ = guarded_import
+import tools.macos_ota
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=os.getcwd(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_cli_has_no_execute_or_state_changing_options(self):
         parser = ota.build_parser()
 

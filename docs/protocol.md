@@ -14,3 +14,18 @@
 `0x2A`のcountが1以上の場合だけ`0x2B`を送り、model名をNUL終端ASCIIとして読みます。配布GLOBAL FW内のidentity文字列は12-byte NUL paddedの`B077T_US_13`です。ASCII不正、空、`B077T`で始まらない値はfail-closedにします。PixArt fwupd一次資料もmodel名をresponse offset 6から12 bytes読みますが、fwupdは別transportであり、このBLE手順そのものの根拠ではありません。
 
 firmware転送、finalization、reset、recoveryに関するcommandは、いずれも未実装です。
+
+## 静的転送計画
+
+`python -m tools.macos_ota --firmware <approved.bin> --show-transfer-plan` は、
+承認済みSHA-256のimageを検証し、Bleakをimport・scan・connect・writeせずに既知の
+wire operationだけを表示します。これは実行器ではありません。
+
+Windows OTAUtilityの解析で確認したnew flowのoperationは、`0x27` init-new、
+`0x25` object-create、raw payload、`0x17` PRN ACK、`0x18` upgrade、`0x22` resetです。
+`0x27`、`0x25`、`0x18`はhostからwith-responseで送信し、`0x25` object ACKと
+`0x18` upgrade ACKはdeviceからのnotifyを待ちます。`0x17` PRN ACKもdeviceからの
+notifyです。raw payloadと`0x22` resetだけはhostからwithout-responseで送信します。
+ただしobject size、payload chunk size、PRN間隔、resume位置は実機の`0x27`応答で
+決まります。`0x18`の`version[10]`の出所と`0x28` retransmitの専用characteristicは
+未確定です。そのため表示は常に`Executable: no`となり、実機へは何も送信しません。

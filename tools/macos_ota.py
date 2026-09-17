@@ -15,12 +15,19 @@ from pathlib import Path
 from typing import Any, Callable
 
 if __package__:
-    from . import ble_transport, firmware_image, ota_protocol, phase1_ble_info
+    from . import (
+        ble_transport,
+        firmware_image,
+        ota_protocol,
+        phase1_ble_info,
+        pixart_ota,
+    )
 else:
     import ble_transport
     import firmware_image
     import ota_protocol
     import phase1_ble_info
+    import pixart_ota
 
 
 _REQUIRED_GATT = frozenset({"ff00", "ff01", "ff02", "ff03"})
@@ -148,6 +155,45 @@ def print_report(report: PreflightReport) -> None:
             print(f"- {blocker}")
 
 
+def _hex(data: bytes) -> str:
+    return data.hex(" ")
+
+
+def print_transfer_plan(
+    image: firmware_image.ValidatedImage, data: bytes
+) -> None:
+    """Display only the statically known OTA wire plan; never performs I/O."""
+    profile = image.profile
+    init_new = pixart_ota.build_init_new(len(data))
+    print(f"Target image: {profile.kind.value}")
+    print(f"Target SHA-256: {profile.sha256}")
+    print(f"Target size: {profile.size} bytes")
+    print(f"Target full-file sum16: 0x{profile.full_file_sum16:04X}")
+    print("Known OTA wire operations (not sent):")
+    print(f"- 0x27 init-new send: {_hex(init_new)} (host→device; with response)")
+    print("- 0x27 state response: ff01 read (device→host)")
+    print(
+        "- 0x25 object-create send: 実機0x27応答で決定 "
+        "(host→device; with response)"
+    )
+    print("- 0x25 object ACK: notify待ち (device→host)")
+    print(
+        "- raw payload send: 実機0x27応答で決定 "
+        "(host→device; without response)"
+    )
+    print("- 0x17 PRN ACK: notify待ち (device→host)")
+    print(
+        "- 0x18 upgrade send: version[10]が未確定 "
+        "(host→device; with response)"
+    )
+    print("- 0x18 upgrade ACK: notify待ち (device→host)")
+    print("- 0x22 reset send: 22 00 (host→device; without response)")
+    print("Executable: no")
+    print("- version[10]が未確定")
+    print("- retransmit endpointが未確定")
+    print("- MTU / PRN / resumeは実機0x27応答で決定")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Nillkin Cube Pocketのread-only OTA preflight"
@@ -156,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-timeout", type=float, default=15.0)
     parser.add_argument("--connect-timeout", type=float, default=10.0)
     parser.add_argument("--operation-timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--show-transfer-plan",
+        action="store_true",
+        help="承認済みFWの静的OTA転送計画だけを表示する（BLE未接続）",
+    )
     return parser
 
 
@@ -199,6 +250,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data = Path(args.firmware).read_bytes()
         image = firmware_image.validate_image(data)
+        if args.show_transfer_plan:
+            print_transfer_plan(image, data)
+            return 0
         report = asyncio.run(_run(args, image))
     except (
         OSError,
