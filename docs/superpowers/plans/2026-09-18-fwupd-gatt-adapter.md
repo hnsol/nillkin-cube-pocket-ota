@@ -53,6 +53,27 @@
 - [ ] version[10]とretransmit endpointが未確定である限り`Executable: no`と表示する。
 - [ ] 既存read-only CLIの挙動を維持し、全testを実行する。
 
-### Task 3: GATT writer（次段階）
+### Task 3: GATT writer（実装のみ。実機実行は別承認）
 
-0x28 endpoint、notify characteristic、version[10]、timeout/retryをOTAUtilityから確定後に別タスクとして実装する。`--execute`と実機writeはこの計画に含めない。
+OTAUtility ILから次を確認した。
+
+- control/data/notifyは`ff01`。notify CCCDも`ff01`で有効化する。
+- `0x28` retransmit/reset-stateは`ff02`へwith-responseで送る。
+- `0x27`、`0x25`、raw payload、`0x18`、`0x22`は`ff01`を使う。
+- `0x27`/`0x25`/`0x18`はwith-response、payload/`0x22`はwithout-response。
+- upgradeのversion[10]は同梱`setting.ini`の`OTA_FW_VERSION=1.0.1`をASCII/NUL paddingした値。
+- object/PRN/upgrade ACKは`ff01` notifyで受ける。
+
+**Files:**
+- Create: `tools/gatt_ota.py`
+- Create: `tests/test_gatt_ota.py`
+- Modify: `tools/macos_ota.py`
+- Modify: `tests/test_macos_ota.py`
+- Modify: `docs/protocol.md`
+
+- [ ] fake GATTでendpoint、write mode、順序、ACK checksum、timeout、disconnectをTDDする。
+- [ ] notifyを先に購読し、`0x28`→`0x27`→object/payload/ACK→`0x18`→`0x22`を実装する。
+- [ ] 全BLE操作を有限timeoutにし、unexpected/malformed notifyをfail-closedにする。
+- [ ] `--execute`は承認済みSHA-256とB077T実機preflightに加え、対象SHA-256の明示確認を必須にする。
+- [ ] `--recover-global`はGLOBALだけを許可し、まず`0x27`でresumeを検証する。不一致なら`0x28`後にoffset/checksum 0を再確認して全転送する。
+- [ ] CLI実装とfake testまでは実施してよいが、実機へのstate-changing writeはユーザーの別途明示許可まで行わない。
