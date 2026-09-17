@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from tools import ble_transport
 from tools import ota_protocol as protocol
 from tools import phase1_ble_info as ble_info
 
@@ -169,7 +170,11 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
             "device-1",
             timeout=5.0,
             services=make_services(),
-            reads=[b"BOOT", b"INIT", b"B077T_US_13\x00\x27\xec"],
+            reads=[
+                b"BOOT",
+                bytes.fromhex("0e 02 10 00"),
+                bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+            ],
         )
 
         result = await ble_info.collect_phase1_info(
@@ -181,8 +186,11 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result.initial_read, b"BOOT")
-        self.assertEqual(result.ota_init_response, b"INIT")
-        self.assertEqual(result.fw_info_response, b"B077T_US_13\x00\x27\xec")
+        self.assertEqual(result.ota_init_response, bytes.fromhex("0e 02 10 00"))
+        self.assertEqual(
+            result.fw_info_response,
+            bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+        )
         self.assertIsNone(result.model_number)
         self.assertIsNone(result.firmware_revision)
         self.assertEqual(
@@ -203,7 +211,13 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
             "device-1",
             timeout=5.0,
             services=make_services(include_device_info=True),
-            reads=[b"PAR2801\x00", b"1.0.0\x00", b"BOOT", b"INIT", b"INFO"],
+            reads=[
+                b"PAR2801\x00",
+                b"1.0.0\x00",
+                b"BOOT",
+                bytes.fromhex("0e 02 10 00"),
+                bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+            ],
         )
 
         result = await ble_info.collect_phase1_info(
@@ -248,6 +262,60 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
                 operation_timeout=0.01,
                 connect_timeout=5,
             )
+
+    async def test_invalid_vendor_response_is_rejected_by_transport(self):
+        client = FakeClient(
+            "device-1",
+            timeout=5.0,
+            services=make_services(),
+            reads=[b"BOOT", bytes.fromhex("0e 02 11 00")],
+        )
+
+        with self.assertRaises(ble_info.Phase1Error) as caught:
+            await ble_info.collect_phase1_info(
+                "device-1",
+                client_factory=lambda device, timeout: client,
+                settle_seconds=0,
+                operation_timeout=1,
+                connect_timeout=5,
+            )
+
+        self.assertIsInstance(
+            caught.exception.__cause__, ble_transport.InvalidResponseError
+        )
+
+
+class ClientFactoryTests(unittest.TestCase):
+    def test_macos_client_factory_sets_notification_discriminator(self):
+        calls = []
+
+        class Client:
+            def __init__(self, device, **kwargs):
+                calls.append((device, kwargs))
+
+        factory = ble_info.make_bleak_client_factory(Client, platform="darwin")
+
+        factory("device-1", timeout=5)
+
+        self.assertEqual(calls[0][0], "device-1")
+        self.assertEqual(calls[0][1]["timeout"], 5)
+        self.assertIs(
+            calls[0][1]["cb"]["notification_discriminator"],
+            ble_transport.is_expected_notification,
+        )
+
+    def test_non_macos_client_factory_does_not_pass_core_bluetooth_options(self):
+        calls = []
+
+        class Client:
+            def __init__(self, device, **kwargs):
+                calls.append((device, kwargs))
+
+        factory = ble_info.make_bleak_client_factory(Client, platform="linux")
+
+        factory("device-1", timeout=5)
+
+        self.assertEqual(calls, [("device-1", {"timeout": 5})])
 
 
 class ScanTests(unittest.IsolatedAsyncioTestCase):

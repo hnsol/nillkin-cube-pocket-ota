@@ -16,8 +16,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 if __package__:
-    from . import ota_protocol
+    from . import ble_transport, ota_protocol
 else:
+    import ble_transport
     import ota_protocol
 
 
@@ -180,30 +181,6 @@ async def _with_timeout(awaitable: Any, timeout: float, operation: str) -> Any:
         raise Phase1Error(f"{operation}が{timeout:g}秒でタイムアウトしました") from exc
 
 
-async def _safe_exchange(
-    client: Any,
-    characteristic: Any,
-    payload: bytes,
-    *,
-    settle_seconds: float,
-    operation_timeout: float,
-) -> bytes:
-    payload = validate_phase1_payload(payload)
-    await _with_timeout(
-        client.write_gatt_char(characteristic, payload, response=True),
-        operation_timeout,
-        f"ff01 write ({payload.hex(' ')})",
-    )
-    if settle_seconds:
-        await asyncio.sleep(settle_seconds)
-    response = await _with_timeout(
-        client.read_gatt_char(characteristic),
-        operation_timeout,
-        f"ff01 read ({payload.hex(' ')}後)",
-    )
-    return bytes(response)
-
-
 async def collect_phase1_info(
     device: Any,
     *,
@@ -237,22 +214,24 @@ async def collect_phase1_info(
                     "ff01 初期read",
                 )
             )
-            ota_init = await _safe_exchange(
+            transport = ble_transport.BleTransport(
                 client,
                 ff01,
-                PHASE1_PAYLOADS[0],
                 settle_seconds=settle_seconds,
                 operation_timeout=operation_timeout,
             )
-            fw_info = await _safe_exchange(
-                client,
-                ff01,
-                PHASE1_PAYLOADS[1],
-                settle_seconds=settle_seconds,
-                operation_timeout=operation_timeout,
-            )
+            ota_init = (
+                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x10])
+            ).raw
+            fw_info = (
+                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])
+            ).raw
     except Phase1Error:
         raise
+    except ble_transport.TransportTimeoutError as exc:
+        raise Phase1Error(f"BLE操作がタイムアウトしました: {exc}") from exc
+    except ble_transport.BleTransportError as exc:
+        raise Phase1Error(f"安全なBLE交換に失敗しました: {exc}") from exc
     except Exception as exc:
         raise Phase1Error(f"BLE接続またはGATT操作に失敗しました: {exc}") from exc
 
@@ -318,6 +297,19 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def make_bleak_client_factory(
+    client_class: Callable[..., Any], *, platform: str = sys.platform
+) -> Callable[..., Any]:
+    def factory(device: Any, **kwargs: Any) -> Any:
+        if platform == "darwin":
+            kwargs["cb"] = {
+                "notification_discriminator": ble_transport.is_expected_notification
+            }
+        return client_class(device, **kwargs)
+
+    return factory
+
+
 async def _run(args: argparse.Namespace) -> Phase1Result:
     try:
         from bleak import BleakClient, BleakScanner
@@ -331,7 +323,7 @@ async def _run(args: argparse.Namespace) -> Phase1Result:
     print(f"found: {getattr(device, 'name', TARGET_NAME)}")
     return await collect_phase1_info(
         device,
-        client_factory=BleakClient,
+        client_factory=make_bleak_client_factory(BleakClient),
         settle_seconds=args.settle,
         operation_timeout=args.operation_timeout,
         connect_timeout=args.connect_timeout,
