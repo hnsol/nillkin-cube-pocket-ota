@@ -22,6 +22,7 @@ python3 -m tools.macos_ota --firmware firmware/original/B077T_US_13.bin
 
 現時点の対応範囲は、BLE scan、GATT情報のread、およびread-only preflightのみです。
 実機probeは、接続先と応答を確認できる状態でのみ実行してください。
+この統合CLIは物理キーボードに対してまだ再実行していません。過去のPhase 1 raw観測はありますが、live preflightとB077T gateは未検証です。
 
 ## 安全性と制限
 
