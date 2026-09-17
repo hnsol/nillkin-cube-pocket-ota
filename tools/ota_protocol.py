@@ -39,6 +39,13 @@ class OtaFirmwareInfo:
 READ_ONLY_COMMANDS = {
     0x10: CommandSpec(0x10, b"\x10\x00", WriteMode.WITH_RESPONSE, 4),
     0x23: CommandSpec(0x23, b"\x23\x00", WriteMode.WITH_RESPONSE, 11),
+    0x2A: CommandSpec(0x2A, b"\x2a\x00", WriteMode.WITH_RESPONSE, 5),
+    0x2B: CommandSpec(
+        0x2B,
+        b"\x2b\x00\x00\x00\x00",
+        WriteMode.WITH_RESPONSE,
+        25,
+    ),
 }
 
 
@@ -67,3 +74,28 @@ def parse_firmware_info(frame: bytes) -> OtaFirmwareInfo:
         raise ProtocolError("firmware version is not ASCII") from exc
     checksum = frame[9] | (frame[10] << 8)
     return OtaFirmwareInfo(version=version, checksum=checksum, raw=frame)
+
+
+def parse_model_count(frame: bytes) -> int:
+    """Parse a non-zero count from a validated GET_NUM_OF_MODEL response."""
+    frame = validate_response(READ_ONLY_COMMANDS[0x2A], frame)
+    count = frame[4]
+    if count == 0:
+        raise ProtocolError("vendor model count is zero")
+    return count
+
+
+def parse_model_info(frame: bytes) -> str:
+    """Parse the NUL-terminated model identity used by the B077T gate."""
+    frame = validate_response(READ_ONLY_COMMANDS[0x2B], frame)
+    model_field = frame[6:18]
+    if b"\x00" not in model_field:
+        raise ProtocolError("vendor model identity is not NUL-terminated")
+    raw_identity = model_field.split(b"\x00", 1)[0]
+    try:
+        identity = raw_identity.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ProtocolError("vendor model identity is not ASCII") from exc
+    if not identity or not identity.startswith("B077T"):
+        raise ProtocolError("vendor model identity is not a supported B077T model")
+    return identity

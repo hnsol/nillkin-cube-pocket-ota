@@ -2,7 +2,7 @@
 """Read Phase 1 BLE information from a Nillkin Cube Pocket keyboard.
 
 This script has no firmware-transfer path.  The only GATT writes it permits are
-the two observed information commands ``10 00`` and ``23 00``.
+the four confirmed read-only information commands.
 """
 
 from __future__ import annotations
@@ -54,9 +54,11 @@ class Phase1Result:
     fw_info_response: bytes
     model_number: str | None = None
     firmware_revision: str | None = None
-    model_identity: ota_protocol.ModelIdentity = (
+    model_identity: str | ota_protocol.ModelIdentity = (
         ota_protocol.ModelIdentity.UNAVAILABLE
     )
+    model_count_response: bytes = b""
+    model_info_response: bytes = b""
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,20 @@ async def collect_phase1_info(
             fw_info = (
                 await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])
             ).raw
+            model_count = (
+                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2A])
+            ).raw
+            try:
+                ota_protocol.parse_model_count(model_count)
+            except ota_protocol.ProtocolError as exc:
+                raise Phase1Error("Get Number Of Model応答の形式が一致しません") from exc
+            model_info = (
+                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2B])
+            ).raw
+            try:
+                model_identity = ota_protocol.parse_model_info(model_info)
+            except ota_protocol.ProtocolError as exc:
+                raise Phase1Error("Get Model応答の形式が一致しません") from exc
     except Phase1Error:
         raise
     except ble_transport.TransportTimeoutError as exc:
@@ -238,12 +254,15 @@ async def collect_phase1_info(
         raise Phase1Error(f"BLE接続またはGATT操作に失敗しました: {exc}") from exc
 
     return Phase1Result(
-        characteristics,
-        initial,
-        ota_init,
-        fw_info,
-        model_number,
-        firmware_revision,
+        characteristics=characteristics,
+        initial_read=initial,
+        ota_init_response=ota_init,
+        fw_info_response=fw_info,
+        model_number=model_number,
+        firmware_revision=firmware_revision,
+        model_identity=model_identity,
+        model_count_response=model_count,
+        model_info_response=model_info,
     )
 
 
@@ -267,12 +286,19 @@ def print_result(result: Phase1Result) -> None:
         print(f"Characteristic {uuid}: {properties}")
     print(f"GATT Model Number (2a24): {result.model_number}")
     print(f"GATT Firmware Revision (2a26): {result.firmware_revision}")
-    print(f"Vendor OTA Model: {result.model_identity.value}")
+    vendor_model = (
+        result.model_identity
+        if isinstance(result.model_identity, str)
+        else result.model_identity.value
+    )
+    print(f"Vendor OTA Model: {vendor_model}")
 
     responses = (
         ("ff01 初期read", result.initial_read),
         ("10 00 応答", result.ota_init_response),
         ("23 00 Get F/W Info応答", result.fw_info_response),
+        ("2a 00 Get Number Of Model応答", result.model_count_response),
+        ("2b 00 00 00 00 Get Model応答", result.model_info_response),
     )
     for label, data in responses:
         print(f"{label}: {data.hex(' ') or '(empty)'}")

@@ -165,7 +165,11 @@ class GattTests(unittest.TestCase):
 
 
 class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
-    async def test_runs_only_initial_read_and_two_known_info_exchanges(self):
+    async def test_runs_fixed_four_command_read_only_sequence(self):
+        model_info = bytes.fromhex(
+            "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
+            " 00 00 00 00 00 00 00"
+        )
         client = FakeClient(
             "device-1",
             timeout=5.0,
@@ -174,6 +178,8 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
                 b"BOOT",
                 bytes.fromhex("0e 02 10 00"),
                 bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+                bytes.fromhex("0e 03 2a 00 01"),
+                model_info,
             ],
         )
 
@@ -193,10 +199,9 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(result.model_number)
         self.assertIsNone(result.firmware_revision)
-        self.assertIs(
-            result.model_identity,
-            protocol.ModelIdentity.UNAVAILABLE,
-        )
+        self.assertEqual(result.model_count_response, bytes.fromhex("0e 03 2a 00 01"))
+        self.assertEqual(result.model_info_response, model_info)
+        self.assertEqual(result.model_identity, "B077T_US_13")
         self.assertEqual(
             client.events,
             [
@@ -205,6 +210,10 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
                 ("write", "ff01", b"\x10\x00", True),
                 ("read", "ff01"),
                 ("write", "ff01", b"\x23\x00", True),
+                ("read", "ff01"),
+                ("write", "ff01", b"\x2a\x00", True),
+                ("read", "ff01"),
+                ("write", "ff01", b"\x2b\x00\x00\x00\x00", True),
                 ("read", "ff01"),
                 ("disconnect",),
             ],
@@ -221,6 +230,11 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
                 b"BOOT",
                 bytes.fromhex("0e 02 10 00"),
                 bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+                bytes.fromhex("0e 03 2a 00 01"),
+                bytes.fromhex(
+                    "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
+                    " 00 00 00 00 00 00 00"
+                ),
             ],
         )
 
@@ -245,8 +259,39 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
                 ("read", "ff01"),
                 ("write", "ff01", b"\x23\x00", True),
                 ("read", "ff01"),
+                ("write", "ff01", b"\x2a\x00", True),
+                ("read", "ff01"),
+                ("write", "ff01", b"\x2b\x00\x00\x00\x00", True),
+                ("read", "ff01"),
                 ("disconnect",),
             ],
+        )
+
+    async def test_zero_model_count_fails_before_model_info_write(self):
+        client = FakeClient(
+            "device-1",
+            timeout=5.0,
+            services=make_services(),
+            reads=[
+                b"BOOT",
+                bytes.fromhex("0e 02 10 00"),
+                bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+                bytes.fromhex("0e 03 2a 00 00"),
+            ],
+        )
+
+        with self.assertRaises(ble_info.Phase1Error):
+            await ble_info.collect_phase1_info(
+                "device-1",
+                client_factory=lambda device, timeout: client,
+                settle_seconds=0,
+                operation_timeout=1,
+                connect_timeout=5,
+            )
+
+        self.assertEqual(
+            [event[2] for event in client.events if event[0] == "write"],
+            [b"\x10\x00", b"\x23\x00", b"\x2a\x00"],
         )
 
     async def test_operation_timeout_is_reported_as_phase1_error(self):
@@ -287,6 +332,23 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(
             caught.exception.__cause__, ble_transport.InvalidResponseError
         )
+
+
+class Phase1ResultCompatibilityTests(unittest.TestCase):
+    def test_seventh_positional_argument_remains_model_identity(self):
+        result = ble_info.Phase1Result(
+            {},
+            b"initial",
+            b"init",
+            b"fw",
+            "PAR2801",
+            "1.0.0",
+            "B077T_US_13",
+        )
+
+        self.assertEqual(result.model_identity, "B077T_US_13")
+        self.assertEqual(result.model_count_response, b"")
+        self.assertEqual(result.model_info_response, b"")
 
 
 class ClientFactoryTests(unittest.TestCase):
@@ -370,6 +432,12 @@ class OutputTests(unittest.TestCase):
             fw_info_response=bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
             model_number="PAR2801",
             firmware_revision="1.0.0",
+            model_count_response=bytes.fromhex("0e 03 2a 00 01"),
+            model_info_response=bytes.fromhex(
+                "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
+                " 00 00 00 00 00 00 00"
+            ),
+            model_identity="B077T_US_13",
         )
         output = io.StringIO()
 
@@ -383,8 +451,9 @@ class OutputTests(unittest.TestCase):
         self.assertIn("GATT Firmware Revision (2a26): 1.0.0", rendered)
         self.assertIn("OTA Firmware Version: 1.0", rendered)
         self.assertIn("OTA checksum: 0x6162", rendered)
-        self.assertIn("Vendor OTA Model: unavailable", rendered)
-        self.assertNotIn("B077T", rendered)
+        self.assertIn("Vendor OTA Model: B077T_US_13", rendered)
+        self.assertIn("0e 03 2a 00 01", rendered)
+        self.assertIn("0e 17 2b 00", rendered)
 
     def test_prints_none_when_standard_device_info_is_absent(self):
         result = ble_info.Phase1Result(

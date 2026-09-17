@@ -1,16 +1,16 @@
 # OTA protocolの根拠
 
-実装は、根拠を確認済みのread-onlyコマンドだけをallowlistに含めます。ローカルで解析したOTAUtilityの挙動では、`10 00`を送信してから`ff01`をreadし、続けて`23 00`を送信してから`ff01`をreadします。UpdateFwInfoは応答のbytes 4..8をNUL以外のASCIIとしてversionに、`response[9] | response[10] << 8`をchecksumに読みます。unit testは、この復元済みの挙動を固定するものであり、根拠そのものではありません。
+実装は、根拠を確認済みのread-onlyコマンドだけをallowlistに含めます。`ff01`へ各requestをwrite-with-responseで送信し、応答をreadします。UpdateFwInfoは応答のbytes 4..8をNUL以外のASCIIとしてversionに、`response[9] | response[10] << 8`をchecksumに読みます。unit testは、この復元済みの挙動を固定するものであり、根拠そのものではありません。
 
 | Opcode | Request | Write mode | Response layout | 根拠 |
 | --- | --- | --- | --- | --- |
 | `0x10` | `10 00` | with response | 4 bytes: `0e`, length, echoed opcode, status `00` | 解析済みOTAUtility挙動。unit testはその挙動を固定 |
 | `0x23` | `23 00` | with response | 11 bytes: `0e`, length, echoed opcode, status `00`, version、checksum | 解析済みOTAUtility挙動。unit testはその挙動を固定 |
-| `0x2A` | 未確認 | 未確認 | 未確認 | request、write mode、response layout、read-only性の根拠が不足 |
-| `0x2B` | 未確認 | 未確認 | 未確認 | request、write mode、response layout、read-only性の根拠が不足 |
+| `0x2A` | `2a 00` | with response | 5 bytes: `0e 03 2a 00 <count>` | GLOBAL FW handler `0x1000df48..0x1000e00e`とresponse builder `0x1000a7ec` |
+| `0x2B` | `2b 00 00 00 00`（index 0） | with response | 25 bytes: `0e 17 2b 00 ...`、model名はoffset 6から最大12 bytes | GLOBAL FW handler `0x1000df48..0x1000e00e`とresponse builder `0x1000a7c8` |
 
 応答は、先頭byte、payload長、echoされたopcode、statusを検証します。
 確認済みraw応答は、`0x10`: `0e 02 10 00`、`0x23`: `0e 09 23 00 31 2e 30 00 00 62 61`です。後者はversion `1.0`、checksum `0x6162`として解析されます。このchecksumはimageのsum16と同一とは扱いません。
-`0x2A`と`0x2B`は実装・送信しません。model queryの根拠が揃うまで、B077T向けのwrite gateは未達です。
+`0x2A`のcountが1以上の場合だけ`0x2B`を送り、model名をNUL終端ASCIIとして読みます。配布GLOBAL FW内のidentity文字列は12-byte NUL paddedの`B077T_US_13`です。ASCII不正、空、`B077T`で始まらない値はfail-closedにします。PixArt fwupd一次資料もmodel名をresponse offset 6から12 bytes読みますが、fwupdは別transportであり、このBLE手順そのものの根拠ではありません。
 
 firmware転送、finalization、reset、recoveryに関するcommandは、いずれも未実装です。

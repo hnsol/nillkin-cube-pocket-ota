@@ -15,6 +15,10 @@ from tools import phase1_ble_info
 
 
 FW_INFO_FRAME = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
+MODEL_INFO_FRAME = bytes.fromhex(
+    "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
+    " 00 00 00 00 00 00 00"
+)
 EXPECTED_SERVICES = ("ff00", "ff01", "ff02", "ff03")
 
 
@@ -49,6 +53,10 @@ def normal_script() -> list[GattStep]:
         GattStep("read", bytes.fromhex("0e 02 10 00")),
         GattStep("write", b"\x23\x00", response=True),
         GattStep("read", FW_INFO_FRAME),
+        GattStep("write", b"\x2a\x00", response=True),
+        GattStep("read", bytes.fromhex("0e 03 2a 00 01")),
+        GattStep("write", b"\x2b\x00\x00\x00\x00", response=True),
+        GattStep("read", MODEL_INFO_FRAME),
     ]
 
 
@@ -184,15 +192,23 @@ class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
             connect_timeout=5,
         )
 
-    async def test_normal_path_finishes_only_two_read_only_writes(self):
+    async def test_normal_path_propagates_vendor_model_through_preflight(self):
         client = self.make_client(normal_script())
 
         report = await self.collect(client)
 
         client.assert_complete()
-        self.assertEqual(client.writes, [(b"\x10\x00", True), (b"\x23\x00", True)])
-        self.assertFalse(report.ready_for_future_flash)
-        self.assertIn("B077T", report.blockers[0])
+        self.assertEqual(
+            client.writes,
+            [
+                (b"\x10\x00", True),
+                (b"\x23\x00", True),
+                (b"\x2a\x00", True),
+                (b"\x2b\x00\x00\x00\x00", True),
+            ],
+        )
+        self.assertEqual(report.vendor_ota_model, "B077T_US_13")
+        self.assertTrue(report.ready_for_future_flash)
 
     async def test_timeout_stops_without_an_additional_write(self):
         script = normal_script()
@@ -229,6 +245,78 @@ class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
             await self.collect(client)
 
         self.assertEqual(client.writes, [(b"\x10\x00", True)])
+
+    async def test_malformed_model_count_stops_before_model_info_write(self):
+        script = normal_script()
+        script[8] = GattStep("read", bytes.fromhex("0e 03 2a 00 00"))
+        client = self.make_client(script)
+
+        with self.assertRaises(phase1_ble_info.Phase1Error):
+            await self.collect(client)
+
+        self.assertEqual(
+            client.writes,
+            [
+                (b"\x10\x00", True),
+                (b"\x23\x00", True),
+                (b"\x2a\x00", True),
+            ],
+        )
+
+    async def test_malformed_model_count_envelope_stops_before_model_info_write(self):
+        script = normal_script()
+        script[8] = GattStep("read", bytes.fromhex("0e 02 2a 00"))
+        client = self.make_client(script)
+
+        with self.assertRaises(phase1_ble_info.Phase1Error):
+            await self.collect(client)
+
+        self.assertEqual(
+            client.writes,
+            [
+                (b"\x10\x00", True),
+                (b"\x23\x00", True),
+                (b"\x2a\x00", True),
+            ],
+        )
+
+    async def test_model_count_read_disconnect_stops_before_model_info_write(self):
+        script = normal_script()
+        script[8] = GattStep(
+            "read",
+            error=ConnectionError("link lost"),
+            disconnect=True,
+        )
+        client = self.make_client(script)
+
+        with self.assertRaises(phase1_ble_info.Phase1Error):
+            await self.collect(client)
+
+        self.assertEqual(
+            client.writes,
+            [
+                (b"\x10\x00", True),
+                (b"\x23\x00", True),
+                (b"\x2a\x00", True),
+            ],
+        )
+
+    async def test_model_count_timeout_stops_before_model_info_write(self):
+        script = normal_script()
+        script[7] = GattStep("write", b"\x2a\x00", response=True, delay=1)
+        client = self.make_client(script)
+
+        with self.assertRaises(phase1_ble_info.Phase1Error):
+            await self.collect(client)
+
+        self.assertEqual(
+            client.writes,
+            [
+                (b"\x10\x00", True),
+                (b"\x23\x00", True),
+                (b"\x2a\x00", True),
+            ],
+        )
 
 
 class CliDiscoveryTests(unittest.IsolatedAsyncioTestCase):
