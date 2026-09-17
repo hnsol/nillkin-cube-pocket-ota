@@ -89,7 +89,7 @@ def analyze_bytes(data: bytes, *, source: str) -> FirmwareAnalysis:
         hashlib.sha256(data).hexdigest(),
         sum(data) & 0xFFFF,
         _ascii_matches(data, rb"B077T_US_\d+"),
-        _ascii_matches(data, rb"PAR2801"),
+        _ascii_matches(data, rb"PAR\d{4}"),
         _ascii_matches(data, rb"(?<![0-9.])1\.0\.0(?![0-9.])"),
         marker_offset,
         keymap_offset,

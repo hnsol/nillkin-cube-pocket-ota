@@ -1,11 +1,16 @@
 import hashlib
 import io
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import patch
 
+from tools import firmware_image as images
 from tools import phase3_build_patch as fw
 
 
@@ -77,6 +82,27 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(fw.FirmwarePatchError, r"0x28.*expected 0x39"):
             fw.validate_original(changed, spec)
 
+    def test_approved_spec_delegates_to_common_internal_validation(self):
+        approved = replace(
+            images.APPROVED_IMAGES[images.ImageKind.GLOBAL],
+            size=len(FIXTURE),
+            sha256=FIXTURE_SHA256,
+            full_file_sum16=0,
+        )
+        approved_images = MappingProxyType({images.ImageKind.GLOBAL: approved})
+        spec = fw.FirmwareSpec(
+            size=len(FIXTURE),
+            sha256=FIXTURE_SHA256,
+            version=b"B077T_US_13",
+            patches=FIXTURE_PATCHES,
+            patched_sum16=0x0CEA,
+            approved_kind=images.ImageKind.GLOBAL,
+        )
+
+        with patch.object(images, "APPROVED_IMAGES", approved_images):
+            with self.assertRaisesRegex(fw.FirmwarePatchError, "sum16"):
+                fw.validate_original(FIXTURE, spec)
+
 
 class PatchingTests(unittest.TestCase):
     def test_changes_only_the_six_declared_offsets(self):
@@ -118,6 +144,17 @@ class PatchingTests(unittest.TestCase):
 
 
 class FileBuildTests(unittest.TestCase):
+    def test_direct_script_help_preserves_cli_entrypoint(self):
+        result = subprocess.run(
+            [sys.executable, "tools/phase3_build_patch.py", "--help"],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Validate GLOBAL firmware", result.stdout)
+
     def test_writes_verified_copy_and_patched_firmware_without_altering_input(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

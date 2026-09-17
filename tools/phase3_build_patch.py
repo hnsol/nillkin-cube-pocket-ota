@@ -12,6 +12,11 @@ from pathlib import Path
 import sys
 import tempfile
 
+if __package__:
+    from . import firmware_image as images
+else:
+    import firmware_image as images
+
 
 class FirmwarePatchError(RuntimeError):
     """Firmware validation or safe output creation failed."""
@@ -32,6 +37,7 @@ class FirmwareSpec:
     version: bytes
     patches: tuple[BytePatch, ...]
     patched_sum16: int
+    approved_kind: images.ImageKind | None = None
 
 
 @dataclass(frozen=True)
@@ -46,10 +52,13 @@ class BuildResult:
     differences: tuple[tuple[int, int, int], ...]
 
 
+_GLOBAL_PROFILE = images.APPROVED_IMAGES[images.ImageKind.GLOBAL]
+_JP_LANG_PROFILE = images.APPROVED_IMAGES[images.ImageKind.JP_LANG]
+
 GLOBAL_SPEC = FirmwareSpec(
-    size=123_916,
-    sha256="00c87d252b639165963cc4452600672305043696d5fec7837b34b3dbed66957f",
-    version=b"B077T_US_13",
+    size=_GLOBAL_PROFILE.size,
+    sha256=_GLOBAL_PROFILE.sha256,
+    version=_GLOBAL_PROFILE.embedded_version,
     patches=(
         BytePatch(0x1DABE, 0x39, 0xE0, "Caps"),
         BytePatch(0x1DB4A, 0xE0, 0xE2, "Left Ctrl"),
@@ -58,7 +67,8 @@ GLOBAL_SPEC = FirmwareSpec(
         BytePatch(0x1DB58, 0xE7, 0x90, "Right Cmd"),
         BytePatch(0x1DB4C, 0xE6, 0xE7, "Right Alt"),
     ),
-    patched_sum16=0xEC29,
+    patched_sum16=_JP_LANG_PROFILE.full_file_sum16,
+    approved_kind=images.ImageKind.GLOBAL,
 )
 
 
@@ -67,6 +77,16 @@ def _sha256(data: bytes) -> str:
 
 
 def validate_original(data: bytes, spec: FirmwareSpec = GLOBAL_SPEC) -> None:
+    if spec.approved_kind is not None:
+        try:
+            validated = images.validate_image(data)
+        except images.ImageValidationError as error:
+            raise FirmwarePatchError(str(error)) from error
+        if validated.profile.kind is not spec.approved_kind:
+            raise FirmwarePatchError(
+                f"firmware kind mismatch: expected {spec.approved_kind.value}, "
+                f"got {validated.profile.kind.value}"
+            )
     if len(data) != spec.size:
         raise FirmwarePatchError(
             f"original size mismatch: expected {spec.size}, got {len(data)}"

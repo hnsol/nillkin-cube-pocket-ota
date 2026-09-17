@@ -58,6 +58,13 @@ class AnalyzeFirmwareTests(unittest.TestCase):
                 (fw.HidLocation(index, 35 + 2 * index),),
             )
 
+    def test_reports_conflicting_par_hardware_model_strings(self):
+        result = fw.analyze_bytes(
+            make_firmware(suffix=b"PAR2802"), source="sample.bin"
+        )
+
+        self.assertEqual(result.hardware_model_strings, ("PAR2801", "PAR2802"))
+
     def test_reports_caps_lock_location(self):
         keymap = [0] * 130
         keymap[13] = 0x39
