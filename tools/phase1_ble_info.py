@@ -15,6 +15,11 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+if __package__:
+    from . import ota_protocol
+else:
+    import ota_protocol
+
 
 TARGET_NAME = "Cube Pocket Keyboard 3"
 FF01_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
@@ -267,20 +272,11 @@ def _ascii_candidates(data: bytes) -> list[str]:
 
 def parse_fw_info_response(data: bytes) -> tuple[str, int]:
     """Parse the fields used by OTAUtility.UpdateFwInfo."""
-    data = bytes(data)
-    if (
-        len(data) != 11
-        or data[0] != 0x0E
-        or data[1] != 0x09
-        or data[2] != 0x23
-        or data[3] != 0x00
-    ):
-        raise Phase1Error("Get F/W Info応答の形式が一致しません")
-    version = bytes(value for value in data[4:9] if value).decode(
-        "ascii", errors="strict"
-    )
-    checksum = data[9] | (data[10] << 8)
-    return version, checksum
+    try:
+        info = ota_protocol.parse_firmware_info(data)
+    except ota_protocol.ProtocolError as exc:
+        raise Phase1Error("Get F/W Info応答の形式が一致しません") from exc
+    return info.version, info.checksum
 
 
 def print_result(result: Phase1Result) -> None:

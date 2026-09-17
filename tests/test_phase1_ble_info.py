@@ -1,8 +1,12 @@
 import asyncio
 import io
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 
+from tools import ota_protocol as protocol
 from tools import phase1_ble_info as ble_info
 
 
@@ -113,8 +117,25 @@ class FirmwareInfoTests(unittest.TestCase):
         self.assertEqual(checksum, 0x6162)
 
     def test_rejects_unexpected_fw_info_frame(self):
-        with self.assertRaises(ble_info.Phase1Error):
+        with self.assertRaises(ble_info.Phase1Error) as caught:
             ble_info.parse_fw_info_response(bytes.fromhex("0e 04 24 00 00 00"))
+
+        self.assertIsInstance(caught.exception.__cause__, protocol.ProtocolError)
+
+
+class DirectExecutionTests(unittest.TestCase):
+    def test_script_help_runs_with_protocol_module_available(self):
+        project_root = Path(__file__).resolve().parents[1]
+
+        result = subprocess.run(
+            [sys.executable, "tools/phase1_ble_info.py", "--help"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class GattTests(unittest.TestCase):
