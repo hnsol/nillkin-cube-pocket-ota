@@ -5,6 +5,7 @@ macOSでBLE接続情報とOTA firmware-infoを確認する、実験的なread-on
 ## セットアップ
 
 Python 3.14.4でvenvを作成します。
+BLE scanは、service UUIDを推測して絞り込まないためmacOS 12.3以降を対象とします。
 
 ```sh
 python3.14 -m venv .venv
@@ -30,5 +31,6 @@ python3 -m tools.macos_ota --firmware firmware/original/B077T_US_13.bin
 - 端末のbrickからの復旧は保証しません。
 - vendor提供のfirmwareおよびtoolは再配布しません。
 - vendor OTA model queryは未検証のため送信せず、B077T向けの将来のwrite gateは満たしません。
+- Phase 1はnotificationを購読しません。CoreBluetoothのnotification discriminator helperは、将来のnotify型OTA ACK処理専用です。
 
 このリポジトリは、状態変更を伴わない調査用の基盤です。flashやrecovery用途には使用しないでください。

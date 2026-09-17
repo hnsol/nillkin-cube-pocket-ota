@@ -162,11 +162,11 @@ Expected: FAIL because `tools.ble_transport` does not exist.
 
 ```python
 def test_notification_discriminator_accepts_only_vendor_frames():
-    assert ble.is_expected_notification(None, bytes.fromhex("0e 02 10 00"))
-    assert not ble.is_expected_notification(None, b"PAR2801")
+    assert ble.is_expected_notification(bytes.fromhex("0e 02 10 00"))
+    assert not ble.is_expected_notification(b"PAR2801")
 ```
 
-Bleak client生成時にmacOS backendへ渡せる場合は、`cb={"notification_discriminator": is_expected_notification}`を使用する。非macOS fakeでは同じpredicateを直接試験する。
+将来のnotify型OTA ACK処理では、`BleakClient.start_notify(..., cb={"notification_discriminator": is_expected_notification})`を使用する。predicateは通知payloadだけを受け取る。read-only Phase 1ではnotificationを購読しない。
 
 - [ ] **Step 5: GATT identityからCoreBluetooth UUIDを除外するtestと実装を追加する**
 

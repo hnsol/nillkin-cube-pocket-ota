@@ -1,7 +1,10 @@
 import argparse
 import io
+import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from tests.fakes import GattStep, ScriptedGattClient
 from tools import ble_transport
@@ -226,6 +229,40 @@ class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
             await self.collect(client)
 
         self.assertEqual(client.writes, [(b"\x10\x00", True)])
+
+
+class CliDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_uses_observed_advertised_local_name(self):
+        device = SimpleNamespace(name=None)
+        target = phase1_ble_info.DiscoveredTarget(
+            device=device,
+            advertised_name="Cube Pocket Keyboard 1",
+        )
+        expected_report = object()
+        args = argparse.Namespace(
+            scan_timeout=3,
+            connect_timeout=4,
+            operation_timeout=5,
+        )
+        fake_bleak = SimpleNamespace(BleakClient=object, BleakScanner=object)
+
+        with (
+            patch.dict(sys.modules, {"bleak": fake_bleak}),
+            patch.object(
+                phase1_ble_info, "scan_target", AsyncMock(return_value=target)
+            ),
+            patch.object(
+                ota, "collect_preflight", AsyncMock(return_value=expected_report)
+            ) as collect,
+        ):
+            report = await ota._run(args, approved_image())
+
+        self.assertIs(report, expected_report)
+        self.assertIs(collect.await_args.args[0], device)
+        self.assertEqual(
+            collect.await_args.kwargs["advertised_name"],
+            "Cube Pocket Keyboard 1",
+        )
 
 
 if __name__ == "__main__":

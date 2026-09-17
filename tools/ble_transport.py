@@ -61,11 +61,19 @@ def build_identity(
     )
 
 
-def is_expected_notification(sender: Any, data: bytes) -> bool:
-    """Identify the vendor response envelope among CoreBluetooth callbacks."""
-    del sender
+def is_expected_notification(data: bytes) -> bool:
+    """Identify the vendor response envelope for Bleak's CoreBluetooth filter."""
     frame = bytes(data)
     return len(frame) >= 4 and frame[0] == 0x0E and frame[1] == len(frame) - 2
+
+
+def corebluetooth_notification_options() -> dict[str, Any]:
+    """Build future OTA ACK options for ``BleakClient.start_notify``.
+
+    Phase 1 does not subscribe to notifications.  A later notify-based ACK path
+    can pass this mapping as keyword arguments to ``start_notify``.
+    """
+    return {"cb": {"notification_discriminator": is_expected_notification}}
 
 
 class BleTransport:

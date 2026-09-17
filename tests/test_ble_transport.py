@@ -113,12 +113,28 @@ class ExchangeFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(caught.exception.__cause__, protocol.ProtocolError)
 
 
-class NotificationTests(unittest.TestCase):
+class NotificationTests(unittest.IsolatedAsyncioTestCase):
     def test_notification_discriminator_accepts_only_vendor_frames(self):
-        self.assertTrue(
-            ble.is_expected_notification(None, bytes.fromhex("0e 02 10 00"))
+        self.assertTrue(ble.is_expected_notification(bytes.fromhex("0e 02 10 00")))
+        self.assertFalse(ble.is_expected_notification(b"PAR2801"))
+
+    async def test_notification_options_match_start_notify_cb_api(self):
+        calls = []
+
+        class Client:
+            async def start_notify(self, characteristic, callback, *, cb):
+                calls.append((characteristic, callback, cb))
+
+        callback = object()
+        await Client().start_notify(
+            "ff01", callback, **ble.corebluetooth_notification_options()
         )
-        self.assertFalse(ble.is_expected_notification(None, b"PAR2801"))
+
+        self.assertEqual(calls[0][0:2], ("ff01", callback))
+        self.assertEqual(
+            calls[0][2],
+            {"notification_discriminator": ble.is_expected_notification},
+        )
 
 
 class IdentityTests(unittest.TestCase):

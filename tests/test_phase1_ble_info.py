@@ -153,6 +153,16 @@ class GattTests(unittest.TestCase):
         with self.assertRaisesRegex(ble_info.GattValidationError, "ff01"):
             ble_info.inspect_gatt(services)
 
+    def test_rejects_ff01_with_only_write_without_response(self):
+        services = make_services()
+        services[0].characteristics[0].properties = [
+            "read",
+            "write-without-response",
+        ]
+
+        with self.assertRaisesRegex(ble_info.GattValidationError, "ff01"):
+            ble_info.inspect_gatt(services)
+
 
 class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_runs_only_initial_read_and_two_known_info_exchanges(self):
@@ -280,32 +290,14 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ClientFactoryTests(unittest.TestCase):
-    def test_macos_client_factory_sets_notification_discriminator(self):
+    def test_macos_client_factory_does_not_pass_start_notify_options(self):
         calls = []
 
         class Client:
             def __init__(self, device, **kwargs):
                 calls.append((device, kwargs))
 
-        factory = ble_info.make_bleak_client_factory(Client, platform="darwin")
-
-        factory("device-1", timeout=5)
-
-        self.assertEqual(calls[0][0], "device-1")
-        self.assertEqual(calls[0][1]["timeout"], 5)
-        self.assertIs(
-            calls[0][1]["cb"]["notification_discriminator"],
-            ble_transport.is_expected_notification,
-        )
-
-    def test_non_macos_client_factory_does_not_pass_core_bluetooth_options(self):
-        calls = []
-
-        class Client:
-            def __init__(self, device, **kwargs):
-                calls.append((device, kwargs))
-
-        factory = ble_info.make_bleak_client_factory(Client, platform="linux")
+        factory = ble_info.make_bleak_client_factory(Client)
 
         factory("device-1", timeout=5)
 
@@ -321,15 +313,17 @@ class ScanTests(unittest.IsolatedAsyncioTestCase):
             @classmethod
             async def find_device_by_filter(cls, filterfunc, timeout):
                 cls.calls.append(timeout)
-                advertisement = SimpleNamespace(local_name=cls.candidate.name)
+                advertisement = SimpleNamespace(local_name=cls.advertised_name)
                 return cls.candidate if filterfunc(cls.candidate, advertisement) else None
 
         for name in ble_info.TARGET_NAMES:
             with self.subTest(name=name):
-                Scanner.candidate = SimpleNamespace(name=name)
-                device = await ble_info.scan_target(Scanner, timeout=8.0)
+                Scanner.candidate = SimpleNamespace(name="stale cached name")
+                Scanner.advertised_name = name
+                target = await ble_info.scan_target(Scanner, timeout=8.0)
 
-                self.assertIs(device, Scanner.candidate)
+                self.assertIs(target.device, Scanner.candidate)
+                self.assertEqual(target.advertised_name, name)
 
         self.assertEqual(Scanner.calls, [8.0, 8.0, 8.0])
 
@@ -337,8 +331,8 @@ class ScanTests(unittest.IsolatedAsyncioTestCase):
         class Scanner:
             @classmethod
             async def find_device_by_filter(cls, filterfunc, timeout):
-                device = SimpleNamespace(name="Cube Pocket Keyboard 30")
-                advertisement = SimpleNamespace(local_name=device.name)
+                device = SimpleNamespace(name="Cube Pocket Keyboard 3")
+                advertisement = SimpleNamespace(local_name="Cube Pocket Keyboard 30")
                 return device if filterfunc(device, advertisement) else None
 
         with self.assertRaises(ble_info.TargetNotFoundError):

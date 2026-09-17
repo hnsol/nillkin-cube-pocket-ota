@@ -170,13 +170,12 @@ async def _run(
             "pip install -r requirements.txt を実行してください"
         ) from exc
 
-    device = await phase1_ble_info.scan_target(
+    target = await phase1_ble_info.scan_target(
         BleakScanner, timeout=args.scan_timeout
     )
-    advertised_name = getattr(device, "name", None) or phase1_ble_info.TARGET_NAME
     return await collect_preflight(
-        device,
-        advertised_name=advertised_name,
+        target.device,
+        advertised_name=target.advertised_name,
         client_factory=phase1_ble_info.make_bleak_client_factory(BleakClient),
         image=image,
         operation_timeout=args.operation_timeout,

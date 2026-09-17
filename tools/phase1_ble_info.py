@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import re
-import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -60,6 +59,12 @@ class Phase1Result:
     )
 
 
+@dataclass(frozen=True)
+class DiscoveredTarget:
+    device: Any = field(repr=False, compare=False)
+    advertised_name: str
+
+
 def normalize_uuid(value: str) -> str:
     """Normalize Bluetooth-base UUIDs to four hex digits for comparison."""
     normalized = str(value).strip().lower()
@@ -100,12 +105,9 @@ def inspect_gatt(services: Iterable[Any]) -> dict[str, CharacteristicInfo]:
         )
 
     ff01_properties = set(found["ff01"].properties)
-    if "read" not in ff01_properties or not {
-        "write",
-        "write-without-response",
-    }.intersection(ff01_properties):
+    if not {"read", "write"}.issubset(ff01_properties):
         raise GattValidationError(
-            "ff01に必要なread/writeプロパティがありません: "
+            "ff01に必要なread/write-with-responseプロパティがありません: "
             + ", ".join(found["ff01"].properties)
         )
     return found
@@ -151,20 +153,27 @@ async def _read_optional_device_info(
     return bytes(raw).rstrip(b"\x00").decode("utf-8", errors="replace")
 
 
-async def scan_target(scanner: Any, *, timeout: float) -> Any:
+async def scan_target(scanner: Any, *, timeout: float) -> DiscoveredTarget:
+    matched_name: str | None = None
+
     def is_target(device: Any, advertisement_data: Any) -> bool:
-        del advertisement_data
-        return getattr(device, "name", None) in TARGET_NAMES
+        del device
+        nonlocal matched_name
+        local_name = getattr(advertisement_data, "local_name", None)
+        if local_name in TARGET_NAMES:
+            matched_name = local_name
+            return True
+        return False
 
     try:
         device = await scanner.find_device_by_filter(is_target, timeout=timeout)
     except Exception as exc:
         raise Phase1Error(f"BLE scanに失敗しました: {exc}") from exc
-    if device is None:
+    if device is None or matched_name is None:
         raise TargetNotFoundError(
             f"{', '.join(TARGET_NAMES)} が{timeout:g}秒以内に見つかりませんでした"
         )
-    return device
+    return DiscoveredTarget(device=device, advertised_name=matched_name)
 
 
 async def _with_timeout(awaitable: Any, timeout: float, operation: str) -> Any:
@@ -292,13 +301,9 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def make_bleak_client_factory(
-    client_class: Callable[..., Any], *, platform: str = sys.platform
+    client_class: Callable[..., Any],
 ) -> Callable[..., Any]:
     def factory(device: Any, **kwargs: Any) -> Any:
-        if platform == "darwin":
-            kwargs["cb"] = {
-                "notification_discriminator": ble_transport.is_expected_notification
-            }
         return client_class(device, **kwargs)
 
     return factory
@@ -313,10 +318,10 @@ async def _run(args: argparse.Namespace) -> Phase1Result:
         ) from exc
 
     print(f"scan: {', '.join(TARGET_NAMES)}（最大{args.scan_timeout:g}秒）")
-    device = await scan_target(BleakScanner, timeout=args.scan_timeout)
-    print(f"found: {getattr(device, 'name', TARGET_NAME)}")
+    target = await scan_target(BleakScanner, timeout=args.scan_timeout)
+    print(f"found: {target.advertised_name}")
     return await collect_phase1_info(
-        device,
+        target.device,
         client_factory=make_bleak_client_factory(BleakClient),
         settle_seconds=args.settle,
         operation_timeout=args.operation_timeout,
