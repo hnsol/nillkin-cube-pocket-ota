@@ -24,7 +24,6 @@ else:
 
 TARGET_NAME = "Cube Pocket Keyboard 3"
 FF01_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
-PHASE1_PAYLOADS = (b"\x10\x00", b"\x23\x00")
 _BLUETOOTH_BASE_SUFFIX = "-0000-1000-8000-00805f9b34fb"
 
 
@@ -38,10 +37,6 @@ class TargetNotFoundError(Phase1Error):
 
 class GattValidationError(Phase1Error):
     """The connected device does not expose the expected GATT layout."""
-
-
-class UnsafeCommandError(Phase1Error):
-    """A caller attempted a write outside the Phase 1 allowlist."""
 
 
 @dataclass(frozen=True)
@@ -73,16 +68,6 @@ def normalize_uuid(value: str) -> str:
     ):
         return normalized[4:8]
     return normalized
-
-
-def validate_phase1_payload(payload: bytes) -> bytes:
-    """Reject every GATT payload except the two known information commands."""
-    payload = bytes(payload)
-    if payload not in PHASE1_PAYLOADS:
-        raise UnsafeCommandError(
-            f"Phase 1で許可されていないpayloadです: {payload.hex(' ')}"
-        )
-    return payload
 
 
 def inspect_gatt(services: Iterable[Any]) -> dict[str, CharacteristicInfo]:

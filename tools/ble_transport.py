@@ -91,10 +91,14 @@ class BleTransport:
             ) from exc
         except Exception as exc:
             if isinstance(exc, ConnectionError) or not getattr(
-                self._client, "is_connected", True
+                self._client, "is_connected", False
             ):
                 raise DisconnectedError(f"disconnected during {operation}") from exc
             raise BleTransportError(f"{operation} failed: {exc}") from exc
+
+    def _ensure_connected(self, stage: str) -> None:
+        if not getattr(self._client, "is_connected", False):
+            raise DisconnectedError(f"disconnected at {stage}")
 
     async def exchange(self, spec: ota_protocol.CommandSpec) -> ExchangeResult:
         if spec not in ota_protocol.READ_ONLY_COMMANDS.values():
@@ -102,6 +106,7 @@ class BleTransport:
                 f"command 0x{spec.opcode:02x} is not in the read-only allowlist"
             )
 
+        self._ensure_connected("exchange entry")
         response = spec.write_mode is ota_protocol.WriteMode.WITH_RESPONSE
         await self._wait_for(
             self._client.write_gatt_char(
@@ -109,20 +114,24 @@ class BleTransport:
             ),
             "write",
         )
+        self._ensure_connected("after write")
         await self._wait_for(
             asyncio.sleep(self._settle_seconds),
             "settle",
         )
+        self._ensure_connected("after settle")
         raw = bytes(
             await self._wait_for(
                 self._client.read_gatt_char(self._characteristic),
                 "read",
             )
         )
+        self._ensure_connected("after read")
         try:
             validated = ota_protocol.validate_response(spec, raw)
         except ota_protocol.ProtocolError as exc:
             raise InvalidResponseError(
                 f"invalid response for command 0x{spec.opcode:02x}"
             ) from exc
+        self._ensure_connected("before return")
         return ExchangeResult(command=spec, raw=validated)

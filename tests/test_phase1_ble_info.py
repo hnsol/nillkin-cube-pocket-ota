@@ -30,6 +30,7 @@ class FakeClient:
         self.services = services
         self._reads = iter(reads)
         self.events = []
+        self.is_connected = True
 
     async def __aenter__(self):
         self.events.append(("connect", self.device))
@@ -94,18 +95,6 @@ class UuidTests(unittest.TestCase):
             ble_info.normalize_uuid("12345678-1234-5678-9ABC-DEF012345678"),
             "12345678-1234-5678-9abc-def012345678",
         )
-
-
-class SafetyTests(unittest.TestCase):
-    def test_only_read_only_phase1_commands_are_allowed(self):
-        self.assertEqual(ble_info.validate_phase1_payload(b"\x10\x00"), b"\x10\x00")
-        self.assertEqual(ble_info.validate_phase1_payload(b"\x23\x00"), b"\x23\x00")
-
-        for unsafe in (b"", b"\x10", b"\x10\x01", b"\x23\x00\x00", b"\x24\x00"):
-            with self.subTest(unsafe=unsafe), self.assertRaises(
-                ble_info.UnsafeCommandError
-            ):
-                ble_info.validate_phase1_payload(unsafe)
 
 
 class FirmwareInfoTests(unittest.TestCase):

@@ -61,6 +61,21 @@ class ExchangeSafetyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExchangeFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_exchange_rejects_silent_disconnect_after_buffered_read(self):
+        class SilentlyDisconnectedClient(FakeClient):
+            async def read_gatt_char(self, characteristic):
+                response = await super().read_gatt_char(characteristic)
+                self.is_connected = False
+                return response
+
+        client = SilentlyDisconnectedClient([FW_INFO_FRAME])
+        transport = ble.BleTransport(
+            client, "ff01", settle_seconds=0, operation_timeout=1
+        )
+
+        with self.assertRaises(ble.DisconnectedError):
+            await transport.exchange(protocol.READ_ONLY_COMMANDS[0x23])
+
     async def test_exchange_converts_timeout_to_transport_timeout(self):
         class HangingClient(FakeClient):
             async def write_gatt_char(self, characteristic, data, *, response):
