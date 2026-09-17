@@ -54,6 +54,9 @@ class Phase1Result:
     fw_info_response: bytes
     model_number: str | None = None
     firmware_revision: str | None = None
+    model_identity: ota_protocol.ModelIdentity = (
+        ota_protocol.ModelIdentity.UNAVAILABLE
+    )
 
 
 def normalize_uuid(value: str) -> str:
@@ -250,6 +253,7 @@ def print_result(result: Phase1Result) -> None:
         print(f"Characteristic {uuid}: {properties}")
     print(f"GATT Model Number (2a24): {result.model_number}")
     print(f"GATT Firmware Revision (2a26): {result.firmware_revision}")
+    print(f"Vendor OTA Model: {result.model_identity.value}")
 
     responses = (
         ("ff01 初期read", result.initial_read),

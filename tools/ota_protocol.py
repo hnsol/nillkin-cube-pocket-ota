@@ -15,6 +15,12 @@ class WriteMode(Enum):
     WITHOUT_RESPONSE = "without-response"
 
 
+class ModelIdentity(Enum):
+    """Availability of the unverified vendor model query."""
+
+    UNAVAILABLE = "unavailable"
+
+
 @dataclass(frozen=True)
 class CommandSpec:
     opcode: int

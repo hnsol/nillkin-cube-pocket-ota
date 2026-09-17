@@ -10,6 +10,10 @@ class ReadOnlyCommandTests(unittest.TestCase):
         self.assertEqual(spec.request, bytes.fromhex("23 00"))
         self.assertIs(spec.write_mode, protocol.WriteMode.WITH_RESPONSE)
 
+    def test_unverified_model_queries_remain_unavailable_and_not_allowlisted(self):
+        self.assertEqual(protocol.ModelIdentity.UNAVAILABLE.value, "unavailable")
+        self.assertEqual(set(protocol.READ_ONLY_COMMANDS), {0x10, 0x23})
+
 
 class FirmwareInfoTests(unittest.TestCase):
     def test_parses_otautility_fw_info_offsets_and_endianness(self):

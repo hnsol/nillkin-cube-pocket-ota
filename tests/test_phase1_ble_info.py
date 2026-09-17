@@ -182,6 +182,10 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(result.model_number)
         self.assertIsNone(result.firmware_revision)
+        self.assertIs(
+            result.model_identity,
+            protocol.ModelIdentity.UNAVAILABLE,
+        )
         self.assertEqual(
             client.events,
             [
@@ -367,7 +371,8 @@ class OutputTests(unittest.TestCase):
         self.assertIn("GATT Firmware Revision (2a26): 1.0.0", rendered)
         self.assertIn("OTA Firmware Version: 1.0", rendered)
         self.assertIn("OTA checksum: 0x6162", rendered)
-        self.assertNotIn("model:", rendered.lower())
+        self.assertIn("Vendor OTA Model: unavailable", rendered)
+        self.assertNotIn("B077T", rendered)
 
     def test_prints_none_when_standard_device_info_is_absent(self):
         result = ble_info.Phase1Result(
