@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,7 +67,7 @@ def evaluate_preflight(
 
     if vendor_model is None or not vendor_model.startswith("B077T"):
         blockers.append("Vendor OTA model B077Tを確認できません")
-    if identity.advertised_name != phase1_ble_info.TARGET_NAME:
+    if identity.advertised_name not in phase1_ble_info.TARGET_NAMES:
         blockers.append("advertised nameがallowlistと一致しません")
     if identity.gatt_model != "PAR2801":
         blockers.append("GATT modelがPAR2801と一致しません")
@@ -185,7 +186,12 @@ async def _run(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if min(args.scan_timeout, args.connect_timeout, args.operation_timeout) <= 0:
+    timeouts = (
+        args.scan_timeout,
+        args.connect_timeout,
+        args.operation_timeout,
+    )
+    if not all(math.isfinite(value) and value > 0 for value in timeouts):
         print(
             "error: timeoutには0より大きい値を指定してください",
             file=sys.stderr,

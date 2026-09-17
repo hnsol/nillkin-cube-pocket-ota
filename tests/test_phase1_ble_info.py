@@ -5,6 +5,7 @@ import sys
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 from tools import ble_transport
 from tools import ota_protocol as protocol
@@ -312,35 +313,52 @@ class ClientFactoryTests(unittest.TestCase):
 
 
 class ScanTests(unittest.IsolatedAsyncioTestCase):
-    async def test_scans_for_exact_device_name(self):
+    async def test_scans_for_each_exact_allowlisted_device_name(self):
         class Scanner:
             calls = []
+            candidate = None
 
             @classmethod
-            async def find_device_by_name(cls, name, timeout):
-                cls.calls.append((name, timeout))
-                return "device-1"
+            async def find_device_by_filter(cls, filterfunc, timeout):
+                cls.calls.append(timeout)
+                advertisement = SimpleNamespace(local_name=cls.candidate.name)
+                return cls.candidate if filterfunc(cls.candidate, advertisement) else None
 
-        device = await ble_info.scan_target(Scanner, timeout=8.0)
+        for name in ble_info.TARGET_NAMES:
+            with self.subTest(name=name):
+                Scanner.candidate = SimpleNamespace(name=name)
+                device = await ble_info.scan_target(Scanner, timeout=8.0)
 
-        self.assertEqual(device, "device-1")
-        self.assertEqual(Scanner.calls, [("Cube Pocket Keyboard 3", 8.0)])
+                self.assertIs(device, Scanner.candidate)
+
+        self.assertEqual(Scanner.calls, [8.0, 8.0, 8.0])
+
+    async def test_scan_rejects_name_outside_exact_allowlist(self):
+        class Scanner:
+            @classmethod
+            async def find_device_by_filter(cls, filterfunc, timeout):
+                device = SimpleNamespace(name="Cube Pocket Keyboard 30")
+                advertisement = SimpleNamespace(local_name=device.name)
+                return device if filterfunc(device, advertisement) else None
+
+        with self.assertRaises(ble_info.TargetNotFoundError):
+            await ble_info.scan_target(Scanner, timeout=0.01)
 
     async def test_reports_target_not_found(self):
         class Scanner:
             @classmethod
-            async def find_device_by_name(cls, name, timeout):
+            async def find_device_by_filter(cls, filterfunc, timeout):
                 return None
 
         with self.assertRaisesRegex(
-            ble_info.TargetNotFoundError, "Cube Pocket Keyboard 3"
+            ble_info.TargetNotFoundError, "Cube Pocket Keyboard 1"
         ):
             await ble_info.scan_target(Scanner, timeout=0.01)
 
     async def test_wraps_scanner_backend_failure_as_phase1_error(self):
         class Scanner:
             @classmethod
-            async def find_device_by_name(cls, name, timeout):
+            async def find_device_by_filter(cls, filterfunc, timeout):
                 raise RuntimeError("Bluetooth is not available")
 
         with self.assertRaisesRegex(ble_info.Phase1Error, "scanに失敗") as caught:

@@ -22,7 +22,8 @@ else:
     import ota_protocol
 
 
-TARGET_NAME = "Cube Pocket Keyboard 3"
+TARGET_NAMES = tuple(f"Cube Pocket Keyboard {unit}" for unit in (1, 2, 3))
+TARGET_NAME = TARGET_NAMES[-1]
 FF01_UUID = "0000ff01-0000-1000-8000-00805f9b34fb"
 _BLUETOOTH_BASE_SUFFIX = "-0000-1000-8000-00805f9b34fb"
 
@@ -151,13 +152,17 @@ async def _read_optional_device_info(
 
 
 async def scan_target(scanner: Any, *, timeout: float) -> Any:
+    def is_target(device: Any, advertisement_data: Any) -> bool:
+        del advertisement_data
+        return getattr(device, "name", None) in TARGET_NAMES
+
     try:
-        device = await scanner.find_device_by_name(TARGET_NAME, timeout=timeout)
+        device = await scanner.find_device_by_filter(is_target, timeout=timeout)
     except Exception as exc:
         raise Phase1Error(f"BLE scanに失敗しました: {exc}") from exc
     if device is None:
         raise TargetNotFoundError(
-            f"{TARGET_NAME} が{timeout:g}秒以内に見つかりませんでした"
+            f"{', '.join(TARGET_NAMES)} が{timeout:g}秒以内に見つかりませんでした"
         )
     return device
 
@@ -307,7 +312,7 @@ async def _run(args: argparse.Namespace) -> Phase1Result:
             "Bleakがありません。venvを有効化し pip install -r requirements.txt を実行してください"
         ) from exc
 
-    print(f"scan: {TARGET_NAME}（最大{args.scan_timeout:g}秒）")
+    print(f"scan: {', '.join(TARGET_NAMES)}（最大{args.scan_timeout:g}秒）")
     device = await scan_target(BleakScanner, timeout=args.scan_timeout)
     print(f"found: {getattr(device, 'name', TARGET_NAME)}")
     return await collect_phase1_info(

@@ -50,6 +50,18 @@ def normal_script() -> list[GattStep]:
 
 
 class PreflightEvaluationTests(unittest.TestCase):
+    def test_each_exact_allowlisted_name_can_satisfy_name_gate(self):
+        for name in phase1_ble_info.TARGET_NAMES:
+            with self.subTest(name=name):
+                report = ota.evaluate_preflight(
+                    expected_identity(advertised_name=name),
+                    "B077T",
+                    current_firmware(),
+                    approved_image(),
+                )
+
+                self.assertTrue(report.ready_for_future_flash)
+
     def test_preflight_is_not_flashable_without_b077t_model(self):
         report = ota.evaluate_preflight(
             expected_identity(), None, current_firmware(), approved_image()
@@ -135,6 +147,23 @@ class ParserSafetyTests(unittest.TestCase):
             (args.scan_timeout, args.connect_timeout, args.operation_timeout),
             (3, 4, 5),
         )
+
+    def test_cli_rejects_every_non_finite_or_non_positive_timeout(self):
+        for option in (
+            "--scan-timeout",
+            "--connect-timeout",
+            "--operation-timeout",
+        ):
+            for value in ("nan", "inf", "0", "-1"):
+                with self.subTest(option=option, value=value):
+                    stderr = io.StringIO()
+                    with redirect_stderr(stderr):
+                        status = ota.main(
+                            ["--firmware", "unused.bin", option, value]
+                        )
+
+                    self.assertEqual(status, 2)
+                    self.assertIn("timeout", stderr.getvalue())
 
 
 class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
