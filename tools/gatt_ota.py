@@ -133,7 +133,7 @@ class GattOtaEngine:
         control_characteristic: Any = CONTROL_CHARACTERISTIC,
         retransmit_characteristic: Any = RETRANSMIT_CHARACTERISTIC,
         settle_seconds: float = 0.03,
-        chunk_pacing_seconds: float = 0.001,
+        chunk_pacing_seconds: float = 0.002,
         operation_timeout: float = 5.0,
         ack_timeout: float = 10.0,
     ) -> None:
@@ -159,10 +159,12 @@ class GattOtaEngine:
         self._chunk_pacing_seconds = chunk_pacing_seconds
         self._operation_timeout = operation_timeout
         self._ack_timeout = ack_timeout
-        self._notifications: asyncio.Queue[bytes] = asyncio.Queue()
+        self._notifications: asyncio.Queue[tuple[bytes, int]] = asyncio.Queue()
+        self._payload_dispatch_counter = 0
         self._used = False
         self.last_state: pixart_ota.OtaState | None = None
         self.host_wnr_limit: int | None = None
+        self.effective_payload_chunk_size: int | None = None
 
     @staticmethod
     def _authorized_data(
@@ -177,7 +179,9 @@ class GattOtaEngine:
         return firmware.data
 
     def _notification_callback(self, _characteristic: Any, data: bytearray) -> None:
-        self._notifications.put_nowait(bytes(data))
+        self._notifications.put_nowait(
+            (bytes(data), self._payload_dispatch_counter)
+        )
 
     def _claim_once(self) -> None:
         if self._used:
@@ -250,21 +254,34 @@ class GattOtaEngine:
             raise GattProtocolError("invalid init-new response") from exc
 
     async def _wait_notification(
-        self, expected_opcode: int, *, stage: str | None = None
+        self,
+        expected_opcode: int,
+        *,
+        stage: str | None = None,
+        minimum_payload_dispatch_counter: int | None = None,
     ) -> bytes:
         wait_stage = stage or f"ACK 0x{expected_opcode:02x}"
-        frame = bytes(
-            await self._bounded(
+        deadline = asyncio.get_running_loop().time() + self._ack_timeout
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise GattTimeoutError(f"{wait_stage} timed out")
+            frame, payload_dispatch_counter = await self._bounded(
                 self._notifications.get(),
                 wait_stage,
-                self._ack_timeout,
+                remaining,
             )
-        )
-        if not frame or frame[0] != expected_opcode:
-            raise GattProtocolError(
-                f"unexpected ACK during {wait_stage}"
-            )
-        return frame
+            if not frame or frame[0] != expected_opcode:
+                raise GattProtocolError(
+                    f"unexpected ACK during {wait_stage}"
+                )
+            if (
+                minimum_payload_dispatch_counter is not None
+                and payload_dispatch_counter
+                < minimum_payload_dispatch_counter
+            ):
+                continue
+            return frame
 
     def _drain_notifications(self) -> None:
         while True:
@@ -281,7 +298,7 @@ class GattOtaEngine:
             f"prn_threshold={state.prn_threshold}"
         )
 
-    def _validate_host_wnr_limit(self, state: pixart_ota.OtaState) -> None:
+    def _validate_host_wnr_limit(self, state: pixart_ota.OtaState) -> int:
         host_mtu = getattr(self._client, "mtu_size", None)
         if (
             not isinstance(host_mtu, int)
@@ -293,11 +310,10 @@ class GattOtaEngine:
                 + self._state_diagnostics(state)
             )
         self.host_wnr_limit = host_mtu - 3
-        if state.mtu_size > self.host_wnr_limit:
-            raise GattProtocolError(
-                f"device mtu_size={state.mtu_size} exceeds host WNR "
-                f"limit={self.host_wnr_limit}; {self._state_diagnostics(state)}"
-            )
+        self.effective_payload_chunk_size = min(
+            state.mtu_size, self.host_wnr_limit
+        )
+        return self.effective_payload_chunk_size
 
     def _chunk_diagnostics(
         self,
@@ -308,31 +324,44 @@ class GattOtaEngine:
         stage: str,
     ) -> str:
         return (
-            f"object {object_index} chunk {chunk_index} length {chunk_length} "
+            f"object {object_index} payload {chunk_index} length {chunk_length} "
             f"{stage}; {self._state_diagnostics(state)}; "
-            f"host WNR limit={self.host_wnr_limit}"
+            f"host WNR limit={self.host_wnr_limit}; "
+            f"effective payload chunk size={self.effective_payload_chunk_size}"
         )
 
     @staticmethod
     def _raise_with_context(error: GattOtaError, context: str) -> Never:
         raise type(error)(f"{context}: {error}") from error
 
-    async def _run_transfer(self, firmware: bytes, state: pixart_ota.OtaState) -> None:
+    async def _run_transfer(
+        self,
+        firmware: bytes,
+        state: pixart_ota.OtaState,
+        payload_chunk_size: int,
+    ) -> None:
+        prn_window_start = True
         object_index = state.offset - 1
         chunk_index = -1
         chunk_length = 0
         for operation in pixart_ota.iter_transfer_operations(
-            firmware, state, OTA_VERSION
+            firmware,
+            state,
+            OTA_VERSION,
+            payload_chunk_size=payload_chunk_size,
         ):
             if operation.kind == "object-create":
                 self._drain_notifications()
+                prn_window_start = True
                 object_index += 1
                 chunk_index = -1
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-object":
                 await self._wait_notification(0x25)
             elif operation.kind == "payload":
-                self._drain_notifications()
+                if prn_window_start:
+                    self._drain_notifications()
+                    prn_window_start = False
                 chunk_index += 1
                 chunk_length = len(operation.payload)
                 write_context = self._chunk_diagnostics(
@@ -348,6 +377,9 @@ class GattOtaEngine:
                     )
                 except GattOtaError as exc:
                     self._raise_with_context(exc, write_context)
+                self._payload_dispatch_counter += 1
+                await asyncio.sleep(self._chunk_pacing_seconds)
+                self._ensure_connected("payload pacing")
             elif operation.kind == "wait-prn":
                 ack_stage = self._chunk_diagnostics(
                     state,
@@ -357,7 +389,12 @@ class GattOtaEngine:
                     "expected ACK 0x17",
                 )
                 try:
-                    frame = await self._wait_notification(0x17)
+                    frame = await self._wait_notification(
+                        0x17,
+                        minimum_payload_dispatch_counter=(
+                            self._payload_dispatch_counter
+                        ),
+                    )
                 except GattOtaError as exc:
                     self._raise_with_context(exc, ack_stage)
                 if len(frame) == 3:
@@ -366,15 +403,11 @@ class GattOtaEngine:
                     checksum = int.from_bytes(frame[2:4], "little")
                 else:
                     raise GattProtocolError(f"malformed checksum ACK during {ack_stage}")
-                if (
-                    operation.expected_checksum is not None
-                    and checksum != operation.expected_checksum
-                ):
+                if checksum != operation.expected_checksum:
                     raise GattProtocolError(
                         f"running checksum ACK does not match during {ack_stage}"
                     )
-                await asyncio.sleep(self._chunk_pacing_seconds)
-                self._ensure_connected("payload pacing")
+                prn_window_start = True
             elif operation.kind == "upgrade":
                 self._drain_notifications()
                 await self._write(self._control, operation.payload, response=True)
@@ -441,10 +474,10 @@ class GattOtaEngine:
             )
             state = await self._read_state(len(data))
             self.last_state = state
-            self._validate_host_wnr_limit(state)
+            payload_chunk_size = self._validate_host_wnr_limit(state)
             if state.offset != 0 or state.checksum != 0:
                 raise GattProtocolError("retransmit did not clear resume state")
-            await self._run_transfer(data, state)
+            await self._run_transfer(data, state, payload_chunk_size)
             primary_failed = False
             return state
         finally:
@@ -461,19 +494,19 @@ class GattOtaEngine:
             subscribed = True
             state = await self._read_state(len(data))
             self.last_state = state
-            self._validate_host_wnr_limit(state)
+            payload_chunk_size = self._validate_host_wnr_limit(state)
             if not self._resume_matches(data, state):
                 await self._write(
                     self._retransmit, pixart_ota.build_retransmit(), response=True
                 )
                 state = await self._read_state(len(data))
                 self.last_state = state
-                self._validate_host_wnr_limit(state)
+                payload_chunk_size = self._validate_host_wnr_limit(state)
                 if state.offset != 0 or state.checksum != 0:
                     raise GattProtocolError(
                         "retransmit did not establish zero recovery state"
                     )
-            await self._run_transfer(data, state)
+            await self._run_transfer(data, state, payload_chunk_size)
             primary_failed = False
             return state
         finally:

@@ -130,7 +130,6 @@ class TransferPlanningTests(unittest.TestCase):
                 ),
                 ota.TransferOperation("wait-object", expected_opcode=0x25),
                 ota.TransferOperation("payload", b"\x01\x02\x03"),
-                ota.TransferOperation("wait-prn", expected_opcode=0x17),
                 ota.TransferOperation("payload", b"\x04"),
                 ota.TransferOperation(
                     "wait-prn", expected_opcode=0x17, expected_checksum=10
@@ -155,7 +154,7 @@ class TransferPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_plan_waits_for_every_chunk_and_checks_only_object_end_checksum(self):
+    def test_plan_waits_at_prn_threshold_and_object_end_with_checksum(self):
         operations = list(
             ota.iter_transfer_operations(
                 bytes(range(1, 9)),
@@ -167,14 +166,55 @@ class TransferPlanningTests(unittest.TestCase):
         self.assertEqual(
             waits,
             [
-                ota.TransferOperation("wait-prn", expected_opcode=0x17),
-                ota.TransferOperation("wait-prn", expected_opcode=0x17),
-                ota.TransferOperation("wait-prn", expected_opcode=0x17),
+                ota.TransferOperation(
+                    "wait-prn", expected_opcode=0x17, expected_checksum=21
+                ),
                 ota.TransferOperation(
                     "wait-prn", expected_opcode=0x17, expected_checksum=36
                 ),
             ],
         )
+
+    def test_plan_uses_explicit_payload_chunk_size_for_prn_windows(self):
+        operations = list(
+            ota.iter_transfer_operations(
+                bytes(range(1, 9)),
+                self.state(max_object_size=8, mtu_size=4, prn_threshold=3),
+                "v1",
+                payload_chunk_size=2,
+            )
+        )
+
+        self.assertEqual(
+            [
+                operation.payload
+                for operation in operations
+                if operation.kind == "payload"
+            ],
+            [b"\x01\x02", b"\x03\x04", b"\x05\x06", b"\x07\x08"],
+        )
+        self.assertEqual(
+            [
+                operation.expected_checksum
+                for operation in operations
+                if operation.kind == "wait-prn"
+            ],
+            [21, 36],
+        )
+
+    def test_plan_rejects_invalid_explicit_payload_chunk_size(self):
+        for chunk_size in (False, 0, -1, 1.5, 4):
+            with self.subTest(chunk_size=chunk_size), self.assertRaises(
+                ota.ProtocolError
+            ):
+                list(
+                    ota.iter_transfer_operations(
+                        b"\x01",
+                        self.state(mtu_size=3),
+                        "v1",
+                        payload_chunk_size=chunk_size,
+                    )
+                )
 
     def test_matching_resume_starts_at_reported_object_and_running_checksum(self):
         operations = list(

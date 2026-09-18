@@ -55,20 +55,23 @@ Windows OTAUtilityの解析で確認したnew flowのoperationは、`0x27` init-
 `0x27`、`0x25`、`0x18`はhostからwith-responseで送信し、`0x25` object ACKと
 `0x18` upgrade ACKはdeviceからのnotifyを待ちます。`0x17` PRN ACKもdeviceからの
 notifyです。raw payloadと`0x22` resetだけはhostからwithout-responseで送信します。
-OTAUtilityに合わせ、raw payloadは各chunkの直後に必ず`0x17` ACKを待ち、その後1ms
-待機してから次のchunkへ進みます。中間chunkではACKのopcodeと3/4 bytesの長さだけを
-検証し、object末尾のACKだけrunning sum16との一致を検証します。3 bytes ACKのchecksumは
-bytes 1..2、4 bytes ACKではbytes 2..3のlittle-endianです。
+OTAUtilityに合わせ、raw payloadは各write後に2ms待機します。`0x17` ACKはPRN threshold数の
+payload送信後、またはobject末尾（firmware末尾を含む）で待ち、すべてのboundaryでrunning
+sum16との一致を厳密に検証します。3 bytes ACKのchecksumはbytes 1..2、4 bytes ACKでは
+bytes 2..3のlittle-endianです。
 FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だけを検査します。
 そのため実装も残りのopaque bytesを解釈しません。各object-createは、最終objectでも
 `0x27`で得たmax object size（配布FWは4096を広告）を宣言し、実際に送るpayloadだけを
 残りのbytesにします。
-ただしobject size、payload chunk size、PRN間隔、resume位置は実機の`0x27`応答で
+ただしobject size、deviceのpayload chunk上限、PRN間隔、resume位置は実機の`0x27`応答で
 決まります。`GattOtaEngine`はその応答を検証してから送信します。`0x18` versionは
 OTAUtility設定から確認した`1.0.1`、retransmitは`ff02`の`0x28`を使います。
-さらにdeviceのchunk sizeがCoreBluetoothのwithout-response上限
-（host MTU - 3）以下であることをobject-create前に確認し、上限を取得できない場合や
-超過する場合は分割せず停止します。診断用に`0x27`のoffset/checksum/max object size/
-MTU/PRN thresholdとhost上限をengine上に保持し、payload送信または`0x17` ACK待機の
-失敗時はCLIエラーにもこれらとobject/chunk位置を含めます。
+`0x27`のmtu_sizeはraw payload受信長の上限であり固定長ではありません。payload chunk
+sizeにはdevice mtu_sizeとCoreBluetoothのwithout-response上限（host MTU - 3）の小さい方を
+使います。PRN windowの先頭でだけ古いnotifyを破棄し、window内のpayload間では破棄しません。
+payload dispatch順も通知に記録し、boundaryより前のwriteに対応する早期`0x17`はchecksumが
+一致しても採用しません。host上限を取得できない場合や不正な場合はobject-create前に停止します。
+診断用に`0x27`のoffset/checksum/max object size/MTU/PRN threshold、host上限、effective
+payload chunk sizeをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
+object/payload位置を含めます。
 `--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。

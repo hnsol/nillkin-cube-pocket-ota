@@ -140,12 +140,23 @@ def _validate_transfer_state(state: OtaState) -> None:
 
 
 def iter_transfer_operations(
-    data: bytes, state: OtaState, version: str
+    data: bytes,
+    state: OtaState,
+    version: str,
+    *,
+    payload_chunk_size: int | None = None,
 ) -> Iterator[TransferOperation]:
     if not data:
         raise ProtocolError("firmware data must not be empty")
     _require_uint(len(data), 32, "firmware size")
     _validate_transfer_state(state)
+    if payload_chunk_size is None:
+        payload_chunk_size = state.mtu_size
+    _require_uint(payload_chunk_size, 16, "payload chunk size")
+    if payload_chunk_size <= 0:
+        raise ProtocolError("payload chunk size must be positive")
+    if payload_chunk_size > state.mtu_size:
+        raise ProtocolError("payload chunk size exceeds device MTU size")
     upgrade_payload = build_upgrade(len(data), sum16(data), version)
 
     object_size = state.max_object_size
@@ -167,16 +178,20 @@ def iter_transfer_operations(
         )
         yield TransferOperation("wait-object", expected_opcode=0x25)
 
-        for chunk_start in range(0, len(object_data), state.mtu_size):
-            chunk = object_data[chunk_start : chunk_start + state.mtu_size]
+        fragments_since_ack = 0
+        for chunk_start in range(0, len(object_data), payload_chunk_size):
+            chunk = object_data[chunk_start : chunk_start + payload_chunk_size]
             running_checksum = (running_checksum + sum(chunk)) & 0xFFFF
             yield TransferOperation("payload", chunk)
+            fragments_since_ack += 1
             object_ended = chunk_start + len(chunk) == len(object_data)
-            yield TransferOperation(
-                "wait-prn",
-                expected_opcode=0x17,
-                expected_checksum=running_checksum if object_ended else None,
-            )
+            if fragments_since_ack == state.prn_threshold or object_ended:
+                yield TransferOperation(
+                    "wait-prn",
+                    expected_opcode=0x17,
+                    expected_checksum=running_checksum,
+                )
+                fragments_since_ack = 0
 
     yield TransferOperation("upgrade", upgrade_payload)
     yield TransferOperation("wait-upgrade", expected_opcode=0x18)
