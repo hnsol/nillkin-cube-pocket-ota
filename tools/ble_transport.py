@@ -139,7 +139,8 @@ class BleTransport:
             validated = ota_protocol.validate_response(spec, raw)
         except ota_protocol.ProtocolError as exc:
             raise InvalidResponseError(
-                f"invalid response for command 0x{spec.opcode:02x}"
+                f"invalid response for command 0x{spec.opcode:02x}; "
+                f"raw={raw.hex(' ') or '(empty)'}"
             ) from exc
         self._ensure_connected("before return")
         return ExchangeResult(command=spec, raw=validated)

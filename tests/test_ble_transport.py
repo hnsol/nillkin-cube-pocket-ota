@@ -112,6 +112,7 @@ class ExchangeFailureTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ble.InvalidResponseError) as caught:
             await transport.exchange(protocol.READ_ONLY_COMMANDS[0x23])
 
+        self.assertIn("raw=0e 02 10 00", str(caught.exception))
         self.assertIsInstance(caught.exception.__cause__, protocol.ProtocolError)
 
 
