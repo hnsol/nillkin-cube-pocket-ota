@@ -114,7 +114,7 @@ class TransferPlanningTests(unittest.TestCase):
     def test_sum16_wraps_at_16_bits(self):
         self.assertEqual(ota.sum16(b"\xff" * 258), 0x00FE)
 
-    def test_plan_splits_objects_payloads_and_ack_boundaries(self):
+    def test_plan_declares_max_size_for_partial_final_object(self):
         operations = list(
             ota.iter_transfer_operations(
                 b"\x01\x02\x03\x04\x05\x06", self.state(), "v1"
@@ -136,7 +136,7 @@ class TransferPlanningTests(unittest.TestCase):
                 ),
                 ota.TransferOperation(
                     "object-create",
-                    bytes.fromhex("25 04 00 00 00 02 00 00 00"),
+                    bytes.fromhex("25 04 00 00 00 04 00 00 00"),
                 ),
                 ota.TransferOperation("wait-object", expected_opcode=0x25),
                 ota.TransferOperation("payload", b"\x05\x06"),
@@ -187,7 +187,7 @@ class TransferPlanningTests(unittest.TestCase):
         self.assertEqual(operations[0].kind, "object-create")
         self.assertEqual(
             operations[0].payload,
-            bytes.fromhex("25 04 00 00 00 02 00 00 00"),
+            bytes.fromhex("25 04 00 00 00 04 00 00 00"),
         )
         wait = next(operation for operation in operations if operation.kind == "wait-prn")
         self.assertEqual(wait.expected_checksum, 21)

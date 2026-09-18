@@ -164,7 +164,7 @@ def iter_transfer_operations(
         address = object_index * object_size
         object_data = data[address : address + object_size]
         yield TransferOperation(
-            "object-create", build_object_create(address, len(object_data))
+            "object-create", build_object_create(address, object_size)
         )
         yield TransferOperation("wait-object", expected_opcode=0x25)
 

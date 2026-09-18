@@ -275,9 +275,7 @@ class GattOtaEngine:
                 prn_window_start = True
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-object":
-                frame = await self._wait_notification(0x25)
-                if frame != b"\x25":
-                    raise GattProtocolError("object ACK has unconfirmed payload")
+                await self._wait_notification(0x25)
             elif operation.kind == "payload":
                 if prn_window_start:
                     self._drain_notifications()

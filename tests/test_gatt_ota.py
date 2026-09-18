@@ -254,7 +254,7 @@ class RaiseOnResetGattClient(FakeGattClient):
 
 def small_transfer_client(
     *,
-    object_ack: bytes = b"\x25",
+    object_ack: bytes = bytes.fromhex("25 000000"),
     checksum_ack: bytes = bytes.fromhex("17 0300"),
     upgrade_ack: bytes = bytes.fromhex("18 0000"),
 ) -> FakeGattClient:
@@ -263,7 +263,7 @@ def small_transfer_client(
     return FakeGattClient(
         reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
         notify_after_write={
-            bytes.fromhex("25 00000000 02000000"): [object_ack],
+            bytes.fromhex("25 00000000 04000000"): [object_ack],
             firmware: [checksum_ack],
             upgrade: [upgrade_ack],
         },
@@ -273,12 +273,12 @@ def small_transfer_client(
 class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_cleanup_failure_after_success_is_reported(self):
         firmware = b"\x01\x02"
-        object_create = bytes.fromhex("25 00000000 02000000")
+        object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = FailingStopGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
-                object_create: [b"\x25"],
+                object_create: [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
@@ -293,23 +293,23 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         client = FailingStopGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
-                bytes.fromhex("25 00000000 02000000"): [bytes.fromhex("25 00")]
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("18 0000")]
             },
         )
 
-        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "object ACK"):
+        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "unexpected ACK"):
             await gatt_ota.GattOtaEngine(
                 client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
             ).flash(authorize(b"\x01\x02"))
 
     async def test_successful_reset_write_may_disconnect_immediately(self):
         firmware = b"\x01\x02"
-        object_create = bytes.fromhex("25 00000000 02000000")
+        object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = DisconnectOnResetGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
-                object_create: [b"\x25"],
+                object_create: [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
@@ -324,12 +324,12 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_reset_write_exception_is_not_treated_as_success(self):
         firmware = b"\x01\x02"
-        object_create = bytes.fromhex("25 00000000 02000000")
+        object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = RaiseOnResetGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
-                object_create: [b"\x25"],
+                object_create: [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
@@ -341,10 +341,12 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             ).flash(authorize(firmware))
 
     async def test_stale_object_ack_is_drained_before_object_create(self):
-        object_create = bytes.fromhex("25 00000000 02000000")
+        object_create = bytes.fromhex("25 00000000 04000000")
         client = FakeGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
-            notify_burst_after_write={bytes.fromhex("27 02000000 00"): [b"\x25"]},
+            notify_burst_after_write={
+                bytes.fromhex("27 02000000 00"): [bytes.fromhex("25 000000")]
+            },
         )
 
         with self.assertRaises(gatt_ota.GattTimeoutError):
@@ -360,12 +362,12 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"\x01\x02", writes)
 
     async def test_stale_prn_ack_is_drained_before_payload_window(self):
-        object_create = bytes.fromhex("25 00000000 02000000")
+        object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = FakeGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_burst_after_write={
-                object_create: [b"\x25", bytes.fromhex("17 0300")]
+                object_create: [bytes.fromhex("25 000000"), bytes.fromhex("17 0300")]
             },
         )
 
@@ -382,11 +384,11 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(upgrade, writes)
 
     async def test_stale_upgrade_ack_is_drained_before_upgrade_write(self):
-        object_create = bytes.fromhex("25 00000000 02000000")
+        object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = FakeGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
-            notify_after_write={object_create: [b"\x25"]},
+            notify_after_write={object_create: [bytes.fromhex("25 000000")]},
             notify_burst_after_write={
                 b"\x01\x02": [
                     bytes.fromhex("17 0300"),
@@ -453,7 +455,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         client = StopBlockingGattClient(
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
-                bytes.fromhex("25 00000000 02000000"): [b"\x25"],
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
@@ -493,16 +495,14 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"\x22\x00", [e[2] for e in client.events if e[0] == "write"])
         self.assertEqual(client.events[-1], ("stop-notify", "ff01"))
 
-    async def test_object_ack_with_unconfirmed_payload_is_rejected(self):
-        client = small_transfer_client(object_ack=bytes.fromhex("25 00"))
+    async def test_object_ack_payload_is_opaque_after_opcode(self):
+        client = small_transfer_client(object_ack=bytes.fromhex("25 deadbe"))
 
-        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "object ACK"):
-            await gatt_ota.GattOtaEngine(
-                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
-            ).flash(authorize(b"\x01\x02"))
+        await gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+        ).flash(authorize(b"\x01\x02"))
 
-        writes = [event[2] for event in client.events if event[0] == "write"]
-        self.assertNotIn(b"\x01\x02", writes)
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
     async def test_malformed_or_mismatched_checksum_ack_stops_without_reset(self):
         for frame in (bytes.fromhex("17 03"), bytes.fromhex("17 0400")):
@@ -641,7 +641,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
                 b"\x03\x04": [bytes.fromhex("17 0a 00")],
-                bytes.fromhex("25 04000000 02000000"): [b"\x25"],
+                bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
                 bytes.fromhex("18 06000000 1500 312e302e310000000000"): [
                     bytes.fromhex("18 00 00")
@@ -668,7 +668,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                 ("write", "ff01", bytes.fromhex("25 00000000 04000000")),
                 ("write", "ff01", b"\x01\x02"),
                 ("write", "ff01", b"\x03\x04"),
-                ("write", "ff01", bytes.fromhex("25 04000000 02000000")),
+                ("write", "ff01", bytes.fromhex("25 04000000 04000000")),
                 ("write", "ff01", b"\x05\x06"),
                 (
                     "write",
@@ -707,7 +707,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
         client = FakeGattClient(
             reads=[init_response(offset=1, checksum=10)],
             notify_after_write={
-                bytes.fromhex("25 04000000 02000000"): [b"\x25"],
+                bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
                 upgrade: [bytes.fromhex("18 00 00")],
             },
@@ -723,7 +723,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             [(event[1], event[2], event[3]) for event in writes],
             [
                 ("ff01", bytes.fromhex("27 06000000 00"), True),
-                ("ff01", bytes.fromhex("25 04000000 02000000"), True),
+                ("ff01", bytes.fromhex("25 04000000 04000000"), True),
                 ("ff01", b"\x05\x06", False),
                 ("ff01", upgrade, True),
                 ("ff01", b"\x22\x00", False),
@@ -741,7 +741,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
                 b"\x03\x04": [bytes.fromhex("17 0a 00")],
-                bytes.fromhex("25 04000000 02000000"): [b"\x25"],
+                bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
                 upgrade: [bytes.fromhex("18 00 00")],
             },

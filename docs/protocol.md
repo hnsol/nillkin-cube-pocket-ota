@@ -42,6 +42,10 @@ Windows OTAUtilityの解析で確認したnew flowのoperationは、`0x27` init-
 `0x27`、`0x25`、`0x18`はhostからwith-responseで送信し、`0x25` object ACKと
 `0x18` upgrade ACKはdeviceからのnotifyを待ちます。`0x17` PRN ACKもdeviceからの
 notifyです。raw payloadと`0x22` resetだけはhostからwithout-responseで送信します。
+FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だけを検査します。
+そのため実装も残りのopaque bytesを解釈しません。各object-createは、最終objectでも
+`0x27`で得たmax object size（配布FWは4096を広告）を宣言し、実際に送るpayloadだけを
+残りのbytesにします。
 ただしobject size、payload chunk size、PRN間隔、resume位置は実機の`0x27`応答で
 決まります。`GattOtaEngine`はその応答を検証してから送信します。`0x18` versionは
 OTAUtility設定から確認した`1.0.1`、retransmitは`ff02`の`0x28`を使います。
