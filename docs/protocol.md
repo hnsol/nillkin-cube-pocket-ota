@@ -55,7 +55,11 @@ Windows OTAUtilityの解析で確認したnew flowのoperationは、`0x27` init-
 `0x27`、`0x25`、`0x18`はhostからwith-responseで送信し、`0x25` object ACKと
 `0x18` upgrade ACKはdeviceからのnotifyを待ちます。`0x17` PRN ACKもdeviceからの
 notifyです。raw payloadと`0x22` resetだけはhostからwithout-responseで送信します。
-OTAUtilityに合わせ、raw payloadは各write後に2ms待機します。`0x17` ACKはPRN threshold数の
+BleakのCoreBluetooth without-response writeはnative送信queueへの投入後すぐreturnし、
+queueの空きを保証しません。そのため各raw payloadとresetのwrite直前に
+`canSendWriteWithoutResponse`を約1ms間隔、operation timeout内でpollし、trueの時だけ送信します。
+APIの例外、不正値、待機中の切断、timeoutはfail-closedです。OTAUtilityに合わせ、raw payloadは
+各write後に2ms待機します。`0x17` ACKはPRN threshold数の
 payload送信後、またはobject末尾（firmware末尾を含む）で待ち、すべてのboundaryでrunning
 sum16との一致を厳密に検証します。3 bytes ACKのchecksumはbytes 1..2、4 bytes ACKでは
 bytes 2..3のlittle-endianです。
@@ -73,5 +77,5 @@ payload dispatch順も通知に記録し、boundaryより前のwriteに対応す
 一致しても採用しません。host上限を取得できない場合や不正な場合はobject-create前に停止します。
 診断用に`0x27`のoffset/checksum/max object size/MTU/PRN threshold、host上限、effective
 payload chunk sizeをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
-object/payload位置を含めます。
+object/payload位置とWNR readinessのfalse観測回数・累積待機時間を含めます。
 `--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。

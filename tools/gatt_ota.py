@@ -165,6 +165,8 @@ class GattOtaEngine:
         self.last_state: pixart_ota.OtaState | None = None
         self.host_wnr_limit: int | None = None
         self.effective_payload_chunk_size: int | None = None
+        self.wnr_ready_false_count = 0
+        self.wnr_ready_wait_seconds = 0.0
 
     @staticmethod
     def _authorized_data(
@@ -219,12 +221,77 @@ class GattOtaEngine:
     async def _write(
         self, characteristic: Any, payload: bytes, *, response: bool
     ) -> None:
+        if not response:
+            await self._wait_for_wnr_ready(f"write 0x{payload[0]:02x}")
         await self._bounded(
             self._client.write_gatt_char(characteristic, payload, response=response),
             f"write 0x{payload[0]:02x}",
         )
 
+    def _corebluetooth_wnr_ready(self):
+        backend_id = getattr(self._client, "backend_id", None)
+        if getattr(backend_id, "value", backend_id) != "core_bluetooth":
+            return None
+        missing = object()
+        backend = getattr(self._client, "_backend", missing)
+        if backend is missing:
+            raise GattOtaError(
+                "CoreBluetooth WNR readiness backend path is unavailable"
+            )
+        peripheral = getattr(backend, "_peripheral", missing)
+        if peripheral is missing:
+            raise GattOtaError(
+                "CoreBluetooth WNR readiness peripheral path is unavailable"
+            )
+        ready = getattr(peripheral, "canSendWriteWithoutResponse", None)
+        if not callable(ready):
+            raise GattOtaError("CoreBluetooth WNR readiness API is unavailable")
+        return ready
+
+    async def _wait_for_wnr_ready(self, stage: str) -> None:
+        ready = self._corebluetooth_wnr_ready()
+        if ready is None:
+            return
+        wait_started: float | None = None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._operation_timeout
+        try:
+            while True:
+                if loop.time() >= deadline:
+                    raise GattTimeoutError(f"{stage} WNR readiness timed out")
+                self._ensure_connected(f"{stage} WNR readiness")
+                try:
+                    value = ready()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if not getattr(self._client, "is_connected", False):
+                        raise GattDisconnectedError(
+                            f"disconnected during {stage} WNR readiness"
+                        ) from exc
+                    raise GattOtaError(
+                        f"{stage} WNR readiness check failed: {exc}"
+                    ) from exc
+                self._ensure_connected(f"{stage} WNR readiness")
+                if value is True:
+                    return
+                if value is not False:
+                    raise GattOtaError(
+                        f"{stage} WNR readiness returned a non-boolean value"
+                    )
+                self.wnr_ready_false_count += 1
+                if wait_started is None:
+                    wait_started = loop.time()
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise GattTimeoutError(f"{stage} WNR readiness timed out")
+                await asyncio.sleep(min(0.001, remaining))
+        finally:
+            if wait_started is not None:
+                self.wnr_ready_wait_seconds += loop.time() - wait_started
+
     async def _write_reset(self, payload: bytes) -> None:
+        await self._wait_for_wnr_ready("reset write")
         self._ensure_connected("reset write")
         try:
             await asyncio.wait_for(
@@ -327,7 +394,9 @@ class GattOtaEngine:
             f"object {object_index} payload {chunk_index} length {chunk_length} "
             f"{stage}; {self._state_diagnostics(state)}; "
             f"host WNR limit={self.host_wnr_limit}; "
-            f"effective payload chunk size={self.effective_payload_chunk_size}"
+            f"effective payload chunk size={self.effective_payload_chunk_size}; "
+            f"WNR readiness false observations={self.wnr_ready_false_count}; "
+            f"WNR readiness wait={self.wnr_ready_wait_seconds:.6f}s"
         )
 
     @staticmethod
@@ -364,19 +433,21 @@ class GattOtaEngine:
                     prn_window_start = False
                 chunk_index += 1
                 chunk_length = len(operation.payload)
-                write_context = self._chunk_diagnostics(
-                    state,
-                    object_index,
-                    chunk_index,
-                    chunk_length,
-                    "payload write",
-                )
                 try:
                     await self._write(
                         self._control, operation.payload, response=False
                     )
                 except GattOtaError as exc:
-                    self._raise_with_context(exc, write_context)
+                    self._raise_with_context(
+                        exc,
+                        self._chunk_diagnostics(
+                            state,
+                            object_index,
+                            chunk_index,
+                            chunk_length,
+                            "payload write",
+                        ),
+                    )
                 self._payload_dispatch_counter += 1
                 await asyncio.sleep(self._chunk_pacing_seconds)
                 self._ensure_connected("payload pacing")

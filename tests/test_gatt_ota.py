@@ -4,6 +4,7 @@ import struct
 import unittest
 import warnings
 from collections import defaultdict, deque
+from types import SimpleNamespace
 from unittest import mock
 
 from tools import firmware_image, gatt_ota, keymap_config
@@ -289,6 +290,34 @@ class RaiseOnResetGattClient(FakeGattClient):
         await super().write_gatt_char(characteristic, data, response=response)
 
 
+class CoreBluetoothPeripheral:
+    def __init__(self, ready: list[object]) -> None:
+        self.ready = deque(ready)
+        self.events: list[tuple] = []
+
+    def canSendWriteWithoutResponse(self):
+        value = self.ready.popleft() if self.ready else True
+        self.events.append(("ready", value))
+        if isinstance(value, BaseException):
+            raise value
+        if callable(value):
+            return value()
+        return value
+
+
+class CoreBluetoothGattClient(FakeGattClient):
+    backend_id = "core_bluetooth"
+
+    def __init__(self, *, ready: list[object], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.peripheral = CoreBluetoothPeripheral(ready)
+        self._backend = SimpleNamespace(_peripheral=self.peripheral)
+
+    async def write_gatt_char(self, characteristic, data, *, response):
+        self.peripheral.events.append(("write", bytes(data), response))
+        await super().write_gatt_char(characteristic, data, response=response)
+
+
 def small_transfer_client(
     *,
     object_ack: bytes = bytes.fromhex("25 000000"),
@@ -308,6 +337,181 @@ def small_transfer_client(
 
 
 class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_corebluetooth_payload_waits_for_native_wnr_queue(self):
+        client = CoreBluetoothGattClient(
+            ready=[False, False, True],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
+                b"\x01\x02": [bytes.fromhex("17 0300")],
+                bytes.fromhex("18 02000000 0300 312e302e310000000000"): [
+                    bytes.fromhex("18 0000")
+                ],
+            },
+        )
+        engine = gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        )
+
+        await engine.flash(authorize(b"\x01\x02"))
+
+        payload_write = ("write", b"\x01\x02", False)
+        first_ready = client.peripheral.events.index(("ready", False))
+        self.assertEqual(
+            client.peripheral.events[first_ready : first_ready + 4],
+            [("ready", False), ("ready", False), ("ready", True), payload_write],
+        )
+        self.assertEqual(engine.wnr_ready_false_count, 2)
+        self.assertGreater(engine.wnr_ready_wait_seconds, 0)
+
+    async def test_corebluetooth_wnr_queue_timeout_stops_before_payload(self):
+        client = CoreBluetoothGattClient(
+            ready=[False] * 100,
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattTimeoutError,
+            r"WNR readiness false observations=[1-9][0-9]*.*WNR readiness.*timed out",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.005,
+                ack_timeout=0.1,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(b"\x01\x02", writes)
+        self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_corebluetooth_wnr_readiness_exception_fails_closed(self):
+        client = CoreBluetoothGattClient(
+            ready=[RuntimeError("native readiness failed")],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(gatt_ota.GattOtaError, "native readiness failed"):
+            await gatt_ota.GattOtaEngine(
+                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+            ).flash(authorize(b"\x01\x02"))
+
+        self.assertNotIn(b"\x01\x02", [e[2] for e in client.events if e[0] == "write"])
+
+    async def test_corebluetooth_disconnect_during_wnr_readiness_fails_closed(self):
+        client = CoreBluetoothGattClient(
+            ready=[],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        def disconnect():
+            client.is_connected = False
+            return False
+
+        client.peripheral.ready.append(disconnect)
+
+        with self.assertRaises(gatt_ota.GattDisconnectedError):
+            await gatt_ota.GattOtaEngine(
+                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+            ).flash(authorize(b"\x01\x02"))
+
+    async def test_corebluetooth_reset_also_waits_for_native_wnr_queue(self):
+        client = CoreBluetoothGattClient(
+            ready=[True, False, True],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
+                b"\x01\x02": [bytes.fromhex("17 0300")],
+                bytes.fromhex("18 02000000 0300 312e302e310000000000"): [
+                    bytes.fromhex("18 0000")
+                ],
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        ).flash(authorize(b"\x01\x02"))
+
+        reset_index = client.peripheral.events.index(("write", b"\x22\x00", False))
+        self.assertEqual(
+            client.peripheral.events[reset_index - 2 : reset_index],
+            [("ready", False), ("ready", True)],
+        )
+
+    async def test_corebluetooth_backend_without_private_path_fails_closed(self):
+        for missing_attribute in ("_backend", "_peripheral"):
+            with self.subTest(missing_attribute=missing_attribute):
+                client = small_transfer_client()
+                client.backend_id = "core_bluetooth"
+                if missing_attribute == "_peripheral":
+                    client._backend = SimpleNamespace()
+
+                with self.assertRaisesRegex(
+                    gatt_ota.GattOtaError, "WNR readiness"
+                ):
+                    await gatt_ota.GattOtaEngine(
+                        client,
+                        settle_seconds=0,
+                        operation_timeout=0.1,
+                        ack_timeout=0.1,
+                    ).flash(authorize(b"\x01\x02"))
+
+                self.assertNotIn(
+                    b"\x01\x02", [e[2] for e in client.events if e[0] == "write"]
+                )
+
+    async def test_corebluetooth_readiness_deadline_precedes_late_true(self):
+        client = CoreBluetoothGattClient(
+            ready=[False, True],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(gatt_ota.GattTimeoutError, "WNR readiness"):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.001,
+                ack_timeout=0.1,
+            ).flash(authorize(b"\x01\x02"))
+
+        self.assertEqual(list(client.peripheral.ready), [True])
+        self.assertNotIn(b"\x01\x02", [e[2] for e in client.events if e[0] == "write"])
+
+    async def test_corebluetooth_existing_peripheral_with_invalid_readiness_fails_closed(self):
+        client = small_transfer_client()
+        client.backend_id = "core_bluetooth"
+        client._backend = SimpleNamespace(_peripheral=SimpleNamespace())
+
+        with self.assertRaisesRegex(gatt_ota.GattOtaError, "WNR readiness"):
+            await gatt_ota.GattOtaEngine(
+                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+            ).flash(authorize(b"\x01\x02"))
+
+        self.assertNotIn(b"\x01\x02", [e[2] for e in client.events if e[0] == "write"])
+
     async def test_host_at_least_device_mtu_keeps_device_payload_chunks(self):
         firmware = b"\x01\x02\x03\x04"
         upgrade = bytes.fromhex("18 04000000 0a00 312e302e310000000000")
@@ -410,7 +614,8 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(b"\x22\x00", writes)
 
     async def test_payload_ack_timeout_reports_chunk_and_never_finalizes(self):
-        client = FakeGattClient(
+        client = CoreBluetoothGattClient(
+            ready=[False, True],
             reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
@@ -422,7 +627,8 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             r"object 0 payload 0 length 2 expected ACK 0x17.*"
             r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
             r"prn_threshold=1.*host WNR limit=244.*"
-            r"effective payload chunk size=2",
+            r"effective payload chunk size=2.*"
+            r"WNR readiness false observations=1",
         ):
             await gatt_ota.GattOtaEngine(
                 client,
@@ -505,6 +711,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                 firmware: [bytes.fromhex("17 0300")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
+        )
+        client.backend_id = "core_bluetooth"
+        client._backend = SimpleNamespace(
+            _peripheral=CoreBluetoothPeripheral([True, True])
         )
 
         await gatt_ota.GattOtaEngine(
