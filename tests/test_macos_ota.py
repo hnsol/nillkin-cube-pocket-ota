@@ -127,8 +127,114 @@ class PreflightEvaluationTests(unittest.TestCase):
         self.assertIn("将来のwrite preflight gateを満たす", rendered)
         self.assertNotIn("転送可能", rendered)
 
+    def test_exact_factory_signature_allows_only_approved_global(self):
+        report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            current_firmware(),
+            approved_image(),
+            accept_factory_signature=True,
+        )
+
+        self.assertTrue(report.ready_for_future_flash)
+        self.assertIsNone(report.vendor_ota_model)
+        self.assertTrue(report.factory_signature_matched)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            ota.print_report(report)
+        self.assertIn("Factory signature: matched", output.getvalue())
+        self.assertIn("Vendor OTA model: unavailable", output.getvalue())
+
+    def test_factory_signature_requires_every_fingerprint_component(self):
+        cases = (
+            expected_identity(advertised_name="Cube Pocket Keyboard 2"),
+            expected_identity(gatt_model="PAR9999"),
+            expected_identity(gatt_revision="1.0.1"),
+            expected_identity(service_uuids=("ff00", "ff01", "ff02")),
+        )
+        for identity in cases:
+            with self.subTest(identity=identity):
+                report = ota.evaluate_preflight(
+                    identity,
+                    ota_protocol.ModelIdentity.UNAVAILABLE,
+                    current_firmware(),
+                    approved_image(),
+                    accept_factory_signature=True,
+                )
+                self.assertFalse(report.factory_signature_matched)
+                self.assertFalse(report.ready_for_future_flash)
+
+        wrong_raw = ota_protocol.OtaFirmwareInfo(
+            version="1.0", checksum=0x6162, raw=FW_INFO_FRAME[:-1] + b"\x60"
+        )
+        report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            wrong_raw,
+            approved_image(),
+            accept_factory_signature=True,
+        )
+        self.assertFalse(report.factory_signature_matched)
+        self.assertFalse(report.ready_for_future_flash)
+
+    def test_factory_signature_rejects_jp_lang_and_configured_targets(self):
+        for kind in (
+            firmware_image.ImageKind.JP_LANG,
+            firmware_image.ImageKind.CONFIGURED,
+        ):
+            profile = firmware_image.FirmwareProfile(
+                kind=kind,
+                size=1,
+                sha256="not-global",
+                full_file_sum16=0,
+                embedded_version=b"B077T_US_13",
+                hardware_model=b"PAR2801",
+                keymap_marker_offset=0,
+            )
+            with self.subTest(kind=kind):
+                report = ota.evaluate_preflight(
+                    expected_identity(),
+                    ota_protocol.ModelIdentity.UNAVAILABLE,
+                    current_firmware(),
+                    firmware_image.ValidatedImage(profile=profile, keymap=()),
+                    accept_factory_signature=True,
+                )
+                self.assertFalse(report.ready_for_future_flash)
+                self.assertFalse(report.factory_signature_matched)
+
 
 class ParserSafetyTests(unittest.TestCase):
+    def test_cli_accepts_factory_signature_and_vendor_probe_flags(self):
+        factory = ota.build_parser().parse_args(
+            ["--firmware", "fw.bin", "--accept-factory-signature"]
+        )
+        probe = ota.build_parser().parse_args(
+            ["--firmware", "fw.bin", "--probe-vendor-model"]
+        )
+
+        self.assertTrue(factory.accept_factory_signature)
+        self.assertTrue(probe.probe_vendor_model)
+
+    def test_cli_rejects_factory_signature_without_execute_and_flag_combination(self):
+        for args in (
+            ["--firmware", "unused.bin", "--accept-factory-signature"],
+            [
+                "--firmware",
+                "unused.bin",
+                "--execute",
+                "--accept-factory-signature",
+                "--probe-vendor-model",
+                "--confirm-sha256",
+                "unused",
+            ],
+        ):
+            with self.subTest(args=args):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    status = ota.main(args)
+                self.assertEqual(status, 2)
+
     def test_cli_execute_requires_exact_target_sha256(self):
         args = ota.build_parser().parse_args(
             [
@@ -315,6 +421,105 @@ import tools.macos_ota
 
 
 class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_execute_rejects_factory_and_vendor_probe_combination(self):
+        with (
+            patch.object(ota, "collect_preflight_on_client", AsyncMock()) as collect,
+            self.assertRaisesRegex(ota.ExecutePreflightError, "併用"),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 3",
+                image=approved_image(),
+                data=b"approved-data",
+                operation_timeout=5,
+                probe_vendor_model=True,
+                accept_factory_signature=True,
+            )
+
+        collect.assert_not_awaited()
+
+    async def test_factory_fallback_authorizes_global_with_embedded_model(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model=None,
+            current_ota_version="1.0",
+            current_ota_checksum=0x6162,
+            target_image_kind="global",
+            target_full_file_sum16=0xEC27,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+            factory_signature_matched=True,
+        )
+        engine = SimpleNamespace(flash=AsyncMock())
+        data = b"approved-data"
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            patch.object(
+                gatt_ota, "authorize_firmware", return_value=object()
+            ) as authorize,
+            patch.object(gatt_ota, "GattOtaEngine", return_value=engine),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 3",
+                image=approved_image(),
+                data=data,
+                operation_timeout=5,
+                accept_factory_signature=True,
+            )
+
+        authorize.assert_called_once_with(data, "B077T_US_13", recovery=False)
+        engine.flash.assert_awaited_once()
+
+    async def test_configured_flash_requires_successful_explicit_vendor_probe(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model="B077T_US_13",
+            current_ota_version="1.0",
+            current_ota_checksum=0x6162,
+            target_image_kind="configured",
+            target_full_file_sum16=0xEC28,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+        )
+        config = keymap_config.KeymapConfig({"caps_lock": 0xE0})
+        image = firmware_image.ValidatedImage(
+            profile=firmware_image.FirmwareProfile(
+                kind=firmware_image.ImageKind.CONFIGURED,
+                size=1,
+                sha256="configured",
+                full_file_sum16=0,
+                embedded_version=b"B077T_US_13",
+                hardware_model=b"PAR2801",
+                keymap_marker_offset=0,
+            ),
+            keymap=(),
+        )
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            self.assertRaisesRegex(ota.ExecutePreflightError, "probe-vendor-model"),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 3",
+                image=image,
+                data=b"target",
+                base_data=b"base",
+                config=config,
+                operation_timeout=5,
+                probe_vendor_model=False,
+            )
+
     async def test_execute_uses_preflight_vendor_model_to_authorize_same_client(self):
         client = object()
         report = ota.PreflightReport(
@@ -436,6 +641,7 @@ class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
                 base_data=b"base",
                 config=config,
                 operation_timeout=5,
+                probe_vendor_model=True,
             )
 
         fixed_auth.assert_not_called()
@@ -548,6 +754,56 @@ class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.writes, [(b"\x10\x00", True)])
 
+    async def test_explicit_vendor_probe_rejects_malformed_model_response_safely(self):
+        client = self.make_client(
+            normal_script()
+            + [
+                GattStep("write", b"\x2a\x00", response=True),
+                GattStep("read", bytes.fromhex("0e 03 2a 00 01")),
+                GattStep("write", b"\x2b\x00\x00\x00\x00", response=True),
+                GattStep("read", b"malformed"),
+            ]
+        )
+
+        with self.assertRaisesRegex(phase1_ble_info.Phase1Error, "Vendor OTA model"):
+            await ota.collect_preflight_on_client(
+                client,
+                advertised_name=phase1_ble_info.TARGET_NAME,
+                image=approved_image(),
+                settle_seconds=0,
+                operation_timeout=1,
+                probe_vendor_model=True,
+            )
+
+        self.assertEqual(
+            client.writes,
+            [
+                (b"\x10\x00", True),
+                (b"\x23\x00", True),
+                (b"\x2a\x00", True),
+                (b"\x2b\x00\x00\x00\x00", True),
+            ],
+        )
+
+    async def test_same_session_fw_info_timeout_becomes_phase1_error(self):
+        script = normal_script()
+        script[5] = GattStep("write", b"\x23\x00", response=True, delay=1)
+        client = self.make_client(script)
+
+        with self.assertRaisesRegex(phase1_ble_info.Phase1Error, "タイムアウト"):
+            await ota.collect_preflight_on_client(
+                client,
+                advertised_name=phase1_ble_info.TARGET_NAME,
+                image=approved_image(),
+                settle_seconds=0,
+                operation_timeout=0.01,
+            )
+
+        self.assertEqual(
+            client.writes,
+            [(b"\x10\x00", True), (b"\x23\x00", True)],
+        )
+
 
 class CliDiscoveryTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_uses_observed_advertised_local_name(self):
@@ -581,6 +837,36 @@ class CliDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             collect.await_args.kwargs["advertised_name"],
             "Cube Pocket Keyboard 1",
         )
+
+    async def test_run_execute_forwards_explicit_probe_flags(self):
+        target = phase1_ble_info.DiscoveredTarget(
+            device=object(), advertised_name="Cube Pocket Keyboard 3"
+        )
+        client = ScriptedGattClient("device-1", timeout=5, script=[])
+        args = argparse.Namespace(
+            scan_timeout=3,
+            connect_timeout=4,
+            operation_timeout=5,
+            device_uuid=None,
+            probe_vendor_model=True,
+            accept_factory_signature=False,
+        )
+        fake_bleak = SimpleNamespace(BleakClient=object, BleakScanner=object)
+
+        with (
+            patch.dict(sys.modules, {"bleak": fake_bleak}),
+            patch.object(ota, "_scan_target", AsyncMock(return_value=target)),
+            patch.object(
+                phase1_ble_info,
+                "make_bleak_client_factory",
+                return_value=lambda device, timeout: client,
+            ),
+            patch.object(ota, "execute_on_client", AsyncMock(return_value=object())) as execute,
+        ):
+            await ota._run_execute(args, approved_image(), b"approved")
+
+        self.assertTrue(execute.await_args.kwargs["probe_vendor_model"])
+        self.assertFalse(execute.await_args.kwargs["accept_factory_signature"])
 
 
 if __name__ == "__main__":

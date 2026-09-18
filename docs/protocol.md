@@ -9,7 +9,7 @@
 
 応答は、先頭byte、payload長、echoされたopcode、statusを検証します。
 確認済みraw応答は、`0x10`: `0e 02 10 00`、`0x23`: `0e 09 23 00 31 2e 30 00 00 62 61`です。後者はversion `1.0`、checksum `0x6162`として解析されます。このchecksumはimageのsum16と同一とは扱いません。
-`0x2A`/`0x2B`は配布GLOBAL FWの解析ではmodel照会として確認できるものの、工場出荷FWでは`0x2A`がタイムアウトしました。通常のmacOS preflightはこの2 opcodeを送らず、`0x10`と`0x23`だけに限定します。従ってvendor OTA modelはunavailableとして扱い、`B077T` modelを必須とするwrite gateはfail-closedのままです。
+`0x2A`/`0x2B`は配布GLOBAL FWの解析ではmodel照会として確認できるものの、工場出荷FWでは`0x2A`がタイムアウトしました。通常のmacOS preflightはこの2 opcodeを送らず、`0x10`と`0x23`だけに限定します。従ってvendor OTA modelはunavailableとして扱い、`B077T` modelを必須とするwrite gateはfail-closedのままです。`--probe-vendor-model`を明示した場合だけ、同一接続上の通常sequence完了後に`0x2A`→`0x2B`を追加します。工場出荷FWではタイムアウトし得ます。
 
 ## macOS CLI
 
@@ -21,9 +21,24 @@ FWを送信しません。実行時は固定GLOBAL/JP_LANG imageのSHA-256を
 緩めるものではありません。
 
 `--execute`ではscan後の**同一BLE接続**でGATT情報、`0x10`、`0x23`を再取得します。
-advertised name、`PAR2801`、`B077T` model、必須GATT構成、image hashがすべて通過した時だけ
-`GattOtaEngine`へ送信を委譲します。CoreBluetooth UUIDは`--device-uuid`でscan対象を絞る用途だけであり、
-本人性の判定には使いません。
+通常のwrite gateはadvertised name、`PAR2801`、`B077T` model、必須GATT構成、image hashが
+すべて通過した時だけ`GattOtaEngine`へ送信を委譲します。JP_LANGと設定生成imageは、
+`--probe-vendor-model`でその同一接続上から`B077T` modelを取得できた場合だけ許可します。
+
+工場出荷FWから固定GLOBALへの初回更新だけは、`--accept-factory-signature`で限定fallbackを
+明示できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision
+`1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答
+`0e 09 23 00 31 2e 30 00 00 62 61`、固定GLOBALの既知hash・埋込`B077T_US_13`・
+`PAR2801`がすべて一致した場合だけです。`0x6162`単体はmodel識別に使いません。
+authorizationにはGLOBALに埋め込まれた`B077T_US_13`を渡しますが、report上のdevice-reported
+Vendor OTA modelは`unavailable`のままとし、factory signature一致を別fieldで表示します。
+このfallbackはJP_LANG、設定生成image、復旧には使えず、`--probe-vendor-model`とも併用できません。
+明示SHA確認も通常どおり必須です。
+
+実施順は、factory signatureでGLOBALのみを書込み、再起動・再接続後に
+`--probe-vendor-model`で`B077T`を確認し、その後にJP_LANGを書き込む順です。
+CLIはこの連続手順を自動実行しません。CoreBluetooth UUIDは`--device-uuid`でscan対象を
+絞る用途だけであり、本人性の判定には使いません。
 
 `tools.macos_recover`は固定GLOBAL imageだけを許す薄い復旧CLIです。同じ確認と
 `--execute --confirm-sha256 <GLOBALのhash>`を必要とします。BLE広告が失われた完全brick状態は

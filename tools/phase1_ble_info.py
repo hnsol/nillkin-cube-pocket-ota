@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Read Phase 1 BLE information from a Nillkin Cube Pocket keyboard.
 
-This script has no firmware-transfer path.  The only GATT writes it permits are
-the two read-only commands confirmed on the factory firmware.
+This script has no firmware-transfer path.  Its default GATT writes are the two
+read-only commands confirmed on the factory firmware; vendor model queries are
+available only to callers that explicitly opt in.
 """
 
 from __future__ import annotations
@@ -193,6 +194,7 @@ async def collect_phase1_info(
     settle_seconds: float = 0.2,
     operation_timeout: float = 5.0,
     connect_timeout: float = 10.0,
+    probe_vendor_model: bool = False,
 ) -> Phase1Result:
     """Connect and execute the fixed, read-only Phase 1 command sequence."""
     try:
@@ -231,6 +233,20 @@ async def collect_phase1_info(
             fw_info = (
                 await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])
             ).raw
+            model_count = b""
+            model_info = b""
+            model_identity: str | ota_protocol.ModelIdentity = (
+                ota_protocol.ModelIdentity.UNAVAILABLE
+            )
+            if probe_vendor_model:
+                model_count = (
+                    await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2A])
+                ).raw
+                ota_protocol.parse_model_count(model_count)
+                model_info = (
+                    await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2B])
+                ).raw
+                model_identity = ota_protocol.parse_model_info(model_info)
     except Phase1Error:
         raise
     except ble_transport.TransportTimeoutError as exc:
@@ -247,9 +263,9 @@ async def collect_phase1_info(
         fw_info_response=fw_info,
         model_number=model_number,
         firmware_revision=firmware_revision,
-        # The factory firmware accepts 0x10 and 0x23, but times out on the
-        # GLOBAL-image-only 0x2A/0x2B model queries.  Do not probe them here.
-        model_identity=ota_protocol.ModelIdentity.UNAVAILABLE,
+        model_identity=model_identity,
+        model_count_response=model_count,
+        model_info_response=model_info,
     )
 
 

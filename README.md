@@ -22,7 +22,7 @@ python3 -m tools.macos_ota --firmware firmware/original/B077T_US_13.bin
 ```
 
 通常実行はread-only preflightです。BLE scan、GATT情報、`0x10` OTA init、`0x23` firmware infoを取得します。FWは送信しません。
-工場出荷FWでは`0x2A` model countが応答せずタイムアウトするため、通常経路では送信しません。このためB077T modelのwrite gateは未達のままで、`--execute`は実行できません。
+工場出荷FWでは`0x2A` model countが応答せずタイムアウトするため、通常経路では送信しません。このためB077T modelのwrite gateは未達のままです。`--probe-vendor-model`を明示した場合だけ、同一接続上で`0x10`→`0x23`の後に`0x2A`→`0x2B`を試します。工場出荷FWではタイムアウトする可能性があります。
 実機probeは、接続先と応答を確認できる状態でのみ実行してください。
 
 ## キーマップ設定とpatch生成
@@ -65,7 +65,29 @@ python3 -m tools.macos_ota \
 
 ## OTA書込み
 
-`--execute`は、同一接続上で再取得したadvertised name、`PAR2801`、`B077T` model、GATT構成を検証してから送信します。さらに、対象ファイルのSHA-256を明示確認しなければ動きません。現在の工場出荷FWはB077T modelを安全に取得できないため、このgateを満たさず書込みません。
+`--execute`は、同一接続上で再取得したadvertised name、`PAR2801`、`B077T` model、GATT構成を検証してから送信します。さらに、対象ファイルのSHA-256を明示確認しなければ動きません。
+
+工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えず、`--probe-vendor-model`とも併用できません。
+
+手順1: 工場出荷FWから固定GLOBALへ更新します。コマンドを示すだけで、自動実行はしません。
+
+```sh
+python3 -m tools.macos_ota \
+  --firmware firmware/original/B077T_US_13.bin \
+  --execute \
+  --accept-factory-signature \
+  --confirm-sha256 00c87d252b639165963cc4452600672305043696d5fec7837b34b3dbed66957f
+```
+
+再起動後に再接続し、手順2としてGLOBAL FWから`B077T` modelを同一接続で取得できることをread-onlyで確認します。
+
+```sh
+python3 -m tools.macos_ota \
+  --firmware firmware/original/B077T_US_13.bin \
+  --probe-vendor-model
+```
+
+`Vendor OTA model: B077T_US_13`が確認できた後だけ、手順3としてJP_LANGを書き込みます。
 
 固定JP LANG版の例です。
 
@@ -73,6 +95,7 @@ python3 -m tools.macos_ota \
 python3 -m tools.macos_ota \
   --firmware firmware/patched/B077T_US_13_JP_LANG.bin \
   --execute \
+  --probe-vendor-model \
   --confirm-sha256 3c096e6498332d677cb0e4a0c541e6630f8955b0a21e97388b776674883f5246
 ```
 
@@ -84,6 +107,7 @@ python3 -m tools.macos_ota \
   --base-firmware firmware/original/B077T_US_13.bin \
   --remap-config configs/my-layout.toml \
   --execute \
+  --probe-vendor-model \
   --confirm-sha256 <生成時に表示されたSHA-256>
 ```
 

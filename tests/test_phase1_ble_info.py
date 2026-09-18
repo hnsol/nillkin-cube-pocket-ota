@@ -250,6 +250,48 @@ class Phase1FlowTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_explicit_vendor_probe_runs_after_factory_safe_sequence(self):
+        client = FakeClient(
+            "device-1",
+            timeout=5.0,
+            services=make_services(include_device_info=True),
+            reads=[
+                b"PAR2801\x00",
+                b"1.0.0\x00",
+                b"BOOT",
+                bytes.fromhex("0e 02 10 00"),
+                bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61"),
+                bytes.fromhex("0e 03 2a 00 01"),
+                bytes.fromhex(
+                    "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
+                    " 00 00 00 00 00 00 00"
+                ),
+            ],
+        )
+
+        result = await ble_info.collect_phase1_info(
+            "device-1",
+            client_factory=lambda device, timeout: client,
+            settle_seconds=0,
+            operation_timeout=1,
+            connect_timeout=5,
+            probe_vendor_model=True,
+        )
+
+        self.assertEqual(result.model_identity, "B077T_US_13")
+        self.assertEqual(result.model_count_response, bytes.fromhex("0e 03 2a 00 01"))
+        self.assertEqual(
+            result.model_info_response,
+            bytes.fromhex(
+                "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
+                " 00 00 00 00 00 00 00"
+            ),
+        )
+        self.assertEqual(
+            [event[2] for event in client.events if event[0] == "write"],
+            [b"\x10\x00", b"\x23\x00", b"\x2a\x00", b"\x2b\x00\x00\x00\x00"],
+        )
+
     async def test_operation_timeout_is_reported_as_phase1_error(self):
         class HangingClient(FakeClient):
             async def read_gatt_char(self, characteristic):

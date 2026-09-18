@@ -34,6 +34,8 @@ else:
 
 
 _REQUIRED_GATT = frozenset({"ff00", "ff01", "ff02", "ff03"})
+_FACTORY_FW_INFO = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
+_FACTORY_NAME = "Cube Pocket Keyboard 3"
 
 
 class ExecutePreflightError(RuntimeError):
@@ -53,6 +55,7 @@ class PreflightReport:
     checksums_comparable: bool
     ready_for_future_flash: bool
     blockers: tuple[str, ...]
+    factory_signature_matched: bool = False
 
 
 def _is_approved_image(image: firmware_image.ValidatedImage | None) -> bool:
@@ -74,13 +77,29 @@ def evaluate_preflight(
     model: str | ota_protocol.ModelIdentity | None,
     current_fw: ota_protocol.OtaFirmwareInfo,
     image: firmware_image.ValidatedImage | None,
+    *,
+    accept_factory_signature: bool = False,
 ) -> PreflightReport:
     """Evaluate future write gates without performing any device I/O."""
     vendor_model = _model_value(model)
     services = {str(value).lower() for value in identity.service_uuids}
     blockers: list[str] = []
+    factory_signature_matched = bool(
+        accept_factory_signature
+        and vendor_model is None
+        and identity.advertised_name == _FACTORY_NAME
+        and identity.gatt_model == "PAR2801"
+        and identity.gatt_revision == "1.0.0"
+        and _REQUIRED_GATT.issubset(services)
+        and current_fw.raw == _FACTORY_FW_INFO
+        and image is not None
+        and image.profile
+        == firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL]
+    )
 
-    if vendor_model is None or not vendor_model.startswith("B077T"):
+    if (
+        vendor_model is None or not vendor_model.startswith("B077T")
+    ) and not factory_signature_matched:
         blockers.append("Vendor OTA model B077Tを確認できません")
     if identity.advertised_name not in phase1_ble_info.TARGET_NAMES:
         blockers.append("advertised nameがallowlistと一致しません")
@@ -106,6 +125,7 @@ def evaluate_preflight(
         checksums_comparable=False,
         ready_for_future_flash=not blockers,
         blockers=tuple(blockers),
+        factory_signature_matched=factory_signature_matched,
     )
 
 
@@ -118,6 +138,8 @@ async def collect_preflight(
     settle_seconds: float = 0.2,
     operation_timeout: float = 5.0,
     connect_timeout: float = 10.0,
+    probe_vendor_model: bool = False,
+    accept_factory_signature: bool = False,
 ) -> PreflightReport:
     """Collect the fixed read-only Phase 1 sequence and evaluate its gates."""
     result = await phase1_ble_info.collect_phase1_info(
@@ -126,6 +148,7 @@ async def collect_preflight(
         settle_seconds=settle_seconds,
         operation_timeout=operation_timeout,
         connect_timeout=connect_timeout,
+        probe_vendor_model=probe_vendor_model,
     )
     identity = ble_transport.build_identity(
         advertised_name=advertised_name,
@@ -139,7 +162,13 @@ async def collect_preflight(
         raise phase1_ble_info.Phase1Error(
             "Get F/W Info応答の形式が一致しません"
         ) from exc
-    return evaluate_preflight(identity, result.model_identity, current_fw, image)
+    return evaluate_preflight(
+        identity,
+        result.model_identity,
+        current_fw,
+        image,
+        accept_factory_signature=accept_factory_signature,
+    )
 
 
 async def collect_preflight_on_client(
@@ -149,6 +178,8 @@ async def collect_preflight_on_client(
     image: firmware_image.ValidatedImage,
     settle_seconds: float = 0.2,
     operation_timeout: float = 5.0,
+    probe_vendor_model: bool = False,
+    accept_factory_signature: bool = False,
 ) -> PreflightReport:
     """Run the confirmed read-only probe without reconnecting the client."""
     services = list(client.services)
@@ -169,8 +200,34 @@ async def collect_preflight_on_client(
         settle_seconds=settle_seconds,
         operation_timeout=operation_timeout,
     )
-    await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x10])
-    fw_info = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])).raw
+    try:
+        await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x10])
+        fw_info = (
+            await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])
+        ).raw
+    except ble_transport.TransportTimeoutError as exc:
+        raise phase1_ble_info.Phase1Error(
+            f"BLE操作がタイムアウトしました: {exc}"
+        ) from exc
+    except ble_transport.BleTransportError as exc:
+        raise phase1_ble_info.Phase1Error(
+            f"安全なBLE交換に失敗しました: {exc}"
+        ) from exc
+    model: str | ota_protocol.ModelIdentity = ota_protocol.ModelIdentity.UNAVAILABLE
+    if probe_vendor_model:
+        try:
+            model_count = (
+                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2A])
+            ).raw
+            ota_protocol.parse_model_count(model_count)
+            model_info = (
+                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2B])
+            ).raw
+            model = ota_protocol.parse_model_info(model_info)
+        except (ble_transport.BleTransportError, ota_protocol.ProtocolError) as exc:
+            raise phase1_ble_info.Phase1Error(
+                "Vendor OTA model probeに失敗しました"
+            ) from exc
     try:
         current_fw = ota_protocol.parse_firmware_info(fw_info)
     except ota_protocol.ProtocolError as exc:
@@ -184,7 +241,11 @@ async def collect_preflight_on_client(
         service_uuids=("ff00", *characteristics.keys()),
     )
     return evaluate_preflight(
-        identity, ota_protocol.ModelIdentity.UNAVAILABLE, current_fw, image
+        identity,
+        model,
+        current_fw,
+        image,
+        accept_factory_signature=accept_factory_signature,
     )
 
 
@@ -197,28 +258,53 @@ async def execute_on_client(
     base_data: bytes | None = None,
     config: keymap_config.KeymapConfig | None = None,
     operation_timeout: float,
+    probe_vendor_model: bool = False,
+    accept_factory_signature: bool = False,
 ) -> PreflightReport:
     """Authorize and flash only after a fresh probe on this exact connection."""
+    if accept_factory_signature and probe_vendor_model:
+        raise ExecutePreflightError(
+            "--accept-factory-signatureと--probe-vendor-modelは併用できません"
+        )
     report = await collect_preflight_on_client(
         client,
         advertised_name=advertised_name,
         image=image,
         operation_timeout=operation_timeout,
+        probe_vendor_model=probe_vendor_model,
+        accept_factory_signature=accept_factory_signature,
     )
-    if not report.ready_for_future_flash or report.vendor_ota_model is None:
+    if not report.ready_for_future_flash:
         raise ExecutePreflightError(
             "write preflight gateを満たしません: " + "; ".join(report.blockers)
         )
     if (base_data is None) != (config is None):
         raise ExecutePreflightError("configured firmware inputs must be paired")
+    if (
+        image.profile.kind is not firmware_image.ImageKind.GLOBAL
+        and not probe_vendor_model
+    ):
+        raise ExecutePreflightError(
+            "JP_LANG/CONFIGUREDには--probe-vendor-modelが必要です"
+        )
+    authorization_model = report.vendor_ota_model
+    if authorization_model is None:
+        global_profile = firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL]
+        if not (
+            accept_factory_signature
+            and report.factory_signature_matched
+            and image.profile == global_profile
+        ):
+            raise ExecutePreflightError("Vendor OTA model B077Tを確認できません")
+        authorization_model = global_profile.embedded_version.decode("ascii")
     if config is None:
         authorized = gatt_ota.authorize_firmware(
-            data, report.vendor_ota_model, recovery=False
+            data, authorization_model, recovery=False
         )
     else:
         authorized = gatt_ota.authorize_configured_firmware(
             data,
-            report.vendor_ota_model,
+            authorization_model,
             base_data=base_data,
             config=config,
             recovery=False,
@@ -234,6 +320,10 @@ def print_report(report: PreflightReport) -> None:
     print(f"GATT model: {report.gatt_model}")
     print(f"GATT revision: {report.gatt_revision}")
     print(f"Vendor OTA model: {report.vendor_ota_model or 'unavailable'}")
+    print(
+        "Factory signature: "
+        + ("matched" if report.factory_signature_matched else "not used")
+    )
     print(f"Current OTA version: {report.current_ota_version}")
     print(f"Current OTA checksum: 0x{report.current_ota_checksum:04X}")
     print(f"Target image: {report.target_image_kind}")
@@ -303,6 +393,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="同一接続で再取得したpreflight通過後にだけFWを書き込む",
     )
     parser.add_argument(
+        "--accept-factory-signature",
+        action="store_true",
+        help="既知factory fingerprintから固定GLOBALへの初回書込みだけを許可する",
+    )
+    parser.add_argument(
+        "--probe-vendor-model",
+        action="store_true",
+        help="0x10→0x23後に同一接続で0x2A→0x2Bを明示的に試す",
+    )
+    parser.add_argument(
         "--confirm-sha256",
         metavar="SHA256",
         help="--execute時に対象FWのSHA-256を完全一致で指定する",
@@ -338,6 +438,7 @@ async def _run(
         image=image,
         operation_timeout=args.operation_timeout,
         connect_timeout=args.connect_timeout,
+        probe_vendor_model=getattr(args, "probe_vendor_model", False),
     )
 
 
@@ -394,11 +495,27 @@ async def _run_execute(
             base_data=base_data,
             config=config,
             operation_timeout=args.operation_timeout,
+            probe_vendor_model=getattr(args, "probe_vendor_model", False),
+            accept_factory_signature=getattr(
+                args, "accept_factory_signature", False
+            ),
         )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.accept_factory_signature and not args.execute:
+        print(
+            "error: --accept-factory-signatureは--execute時だけ指定できます",
+            file=sys.stderr,
+        )
+        return 2
+    if args.accept_factory_signature and args.probe_vendor_model:
+        print(
+            "error: --accept-factory-signatureと--probe-vendor-modelは併用できません",
+            file=sys.stderr,
+        )
+        return 2
     if bool(args.base_firmware) != bool(args.remap_config):
         print(
             "error: --base-firmwareと--remap-configは常に組で指定してください",
