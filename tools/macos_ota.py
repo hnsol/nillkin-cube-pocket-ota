@@ -1,8 +1,4 @@
-#!/usr/bin/env python3
-"""Fail-closed, read-only macOS OTA preflight.
-
-This module deliberately contains no firmware transfer or state-changing path.
-"""
+"""Fail-closed macOS OTA preflight and explicitly-confirmed updater."""
 
 from __future__ import annotations
 
@@ -10,14 +6,16 @@ import argparse
 import asyncio
 import math
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 if __package__:
     from . import (
         ble_transport,
         firmware_image,
+        gatt_ota,
         ota_protocol,
         phase1_ble_info,
         pixart_ota,
@@ -25,12 +23,17 @@ if __package__:
 else:
     import ble_transport
     import firmware_image
+    import gatt_ota
     import ota_protocol
     import phase1_ble_info
     import pixart_ota
 
 
 _REQUIRED_GATT = frozenset({"ff00", "ff01", "ff02", "ff03"})
+
+
+class ExecutePreflightError(RuntimeError):
+    """A same-session write preflight gate did not pass."""
 
 
 @dataclass(frozen=True)
@@ -52,8 +55,7 @@ def _is_approved_image(image: firmware_image.ValidatedImage | None) -> bool:
     if image is None:
         return False
     return any(
-        image.profile == profile
-        for profile in firmware_image.APPROVED_IMAGES.values()
+        image.profile == profile for profile in firmware_image.APPROVED_IMAGES.values()
     )
 
 
@@ -80,9 +82,7 @@ def evaluate_preflight(
         blockers.append("GATT modelがPAR2801と一致しません")
     missing_gatt = sorted(_REQUIRED_GATT - services)
     if missing_gatt:
-        blockers.append(
-            "必須GATT構成が不足しています: " + ", ".join(missing_gatt)
-        )
+        blockers.append("必須GATT構成が不足しています: " + ", ".join(missing_gatt))
     if not _is_approved_image(image):
         blockers.append("firmware imageが承認済みではありません")
 
@@ -136,6 +136,85 @@ async def collect_preflight(
     return evaluate_preflight(identity, result.model_identity, current_fw, image)
 
 
+async def collect_preflight_on_client(
+    client: Any,
+    *,
+    advertised_name: str,
+    image: firmware_image.ValidatedImage,
+    settle_seconds: float = 0.2,
+    operation_timeout: float = 5.0,
+) -> PreflightReport:
+    """Run the confirmed read-only probe without reconnecting the client."""
+    services = list(client.services)
+    characteristics = phase1_ble_info.inspect_gatt(services)
+    model_number = await phase1_ble_info._read_optional_device_info(
+        client, services, "2a24", operation_timeout=operation_timeout
+    )
+    firmware_revision = await phase1_ble_info._read_optional_device_info(
+        client, services, "2a26", operation_timeout=operation_timeout
+    )
+    ff01 = characteristics["ff01"].characteristic
+    await phase1_ble_info._with_timeout(
+        client.read_gatt_char(ff01), operation_timeout, "ff01 初期read"
+    )
+    transport = ble_transport.BleTransport(
+        client,
+        ff01,
+        settle_seconds=settle_seconds,
+        operation_timeout=operation_timeout,
+    )
+    await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x10])
+    fw_info = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])).raw
+    model_count = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2A])).raw
+    try:
+        ota_protocol.parse_model_count(model_count)
+    except ota_protocol.ProtocolError as exc:
+        raise phase1_ble_info.Phase1Error(
+            "Get Number Of Model応答の形式が一致しません"
+        ) from exc
+    model_info = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2B])).raw
+    try:
+        model = ota_protocol.parse_model_info(model_info)
+        current_fw = ota_protocol.parse_firmware_info(fw_info)
+    except ota_protocol.ProtocolError as exc:
+        raise phase1_ble_info.Phase1Error("OTA情報応答の形式が一致しません") from exc
+    identity = ble_transport.build_identity(
+        advertised_name=advertised_name,
+        gatt_model=model_number,
+        gatt_revision=firmware_revision,
+        service_uuids=("ff00", *characteristics.keys()),
+    )
+    return evaluate_preflight(identity, model, current_fw, image)
+
+
+async def execute_on_client(
+    client: Any,
+    *,
+    advertised_name: str,
+    image: firmware_image.ValidatedImage,
+    data: bytes,
+    operation_timeout: float,
+) -> PreflightReport:
+    """Authorize and flash only after a fresh probe on this exact connection."""
+    report = await collect_preflight_on_client(
+        client,
+        advertised_name=advertised_name,
+        image=image,
+        operation_timeout=operation_timeout,
+    )
+    if not report.ready_for_future_flash or report.vendor_ota_model is None:
+        raise ExecutePreflightError(
+            "write preflight gateを満たしません: " + "; ".join(report.blockers)
+        )
+    authorized = gatt_ota.authorize_firmware(
+        data, report.vendor_ota_model, recovery=False
+    )
+    await gatt_ota.GattOtaEngine(client, operation_timeout=operation_timeout).flash(
+        authorized
+    )
+    return report
+
+
 def print_report(report: PreflightReport) -> None:
     print(f"Advertised name: {report.advertised_name}")
     print(f"GATT model: {report.gatt_model}")
@@ -159,9 +238,7 @@ def _hex(data: bytes) -> str:
     return data.hex(" ")
 
 
-def print_transfer_plan(
-    image: firmware_image.ValidatedImage, data: bytes
-) -> None:
+def print_transfer_plan(image: firmware_image.ValidatedImage, data: bytes) -> None:
     """Display only the statically known OTA wire plan; never performs I/O."""
     profile = image.profile
     init_new = pixart_ota.build_init_new(len(data))
@@ -172,20 +249,11 @@ def print_transfer_plan(
     print("Known OTA wire operations (not sent):")
     print(f"- 0x27 init-new send: {_hex(init_new)} (host→device; with response)")
     print("- 0x27 state response: ff01 read (device→host)")
-    print(
-        "- 0x25 object-create send: 実機0x27応答で決定 "
-        "(host→device; with response)"
-    )
+    print("- 0x25 object-create send: 実機0x27応答で決定 (host→device; with response)")
     print("- 0x25 object ACK: notify待ち (device→host)")
-    print(
-        "- raw payload send: 実機0x27応答で決定 "
-        "(host→device; without response)"
-    )
+    print("- raw payload send: 実機0x27応答で決定 (host→device; without response)")
     print("- 0x17 PRN ACK: notify待ち (device→host)")
-    print(
-        "- 0x18 upgrade send: version[10]が未確定 "
-        "(host→device; with response)"
-    )
+    print("- 0x18 upgrade send: version[10]が未確定 (host→device; with response)")
     print("- 0x18 upgrade ACK: notify待ち (device→host)")
     print("- 0x22 reset send: 22 00 (host→device; without response)")
     print("Executable: no")
@@ -202,6 +270,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-timeout", type=float, default=15.0)
     parser.add_argument("--connect-timeout", type=float, default=10.0)
     parser.add_argument("--operation-timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--device-uuid",
+        help="CoreBluetooth UUIDでscan対象を絞る（本人性の判定には使わない）",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="同一接続で再取得したpreflight通過後にだけFWを書き込む",
+    )
+    parser.add_argument(
+        "--confirm-sha256",
+        metavar="SHA256",
+        help="--execute時に対象FWのSHA-256を完全一致で指定する",
+    )
     parser.add_argument(
         "--show-transfer-plan",
         action="store_true",
@@ -221,9 +303,7 @@ async def _run(
             "pip install -r requirements.txt を実行してください"
         ) from exc
 
-    target = await phase1_ble_info.scan_target(
-        BleakScanner, timeout=args.scan_timeout
-    )
+    target = await phase1_ble_info.scan_target(BleakScanner, timeout=args.scan_timeout)
     return await collect_preflight(
         target.device,
         advertised_name=target.advertised_name,
@@ -234,8 +314,60 @@ async def _run(
     )
 
 
+async def _scan_target(
+    scanner: Any, *, timeout: float, device_uuid: str | None
+) -> phase1_ble_info.DiscoveredTarget:
+    if device_uuid is None:
+        return await phase1_ble_info.scan_target(scanner, timeout=timeout)
+    wanted = device_uuid.lower()
+    matched_name: str | None = None
+
+    def matches(device: Any, advertisement_data: Any) -> bool:
+        nonlocal matched_name
+        if str(getattr(device, "address", "")).lower() != wanted:
+            return False
+        local_name = getattr(advertisement_data, "local_name", None)
+        if local_name not in phase1_ble_info.TARGET_NAMES:
+            return False
+        matched_name = local_name
+        return True
+
+    device = await scanner.find_device_by_filter(matches, timeout=timeout)
+    if device is None or matched_name is None:
+        raise phase1_ble_info.TargetNotFoundError(
+            "指定UUIDかつCube Pocket Keyboardの広告が見つかりません"
+        )
+    return phase1_ble_info.DiscoveredTarget(device, matched_name)
+
+
+async def _run_execute(
+    args: argparse.Namespace, image: firmware_image.ValidatedImage, data: bytes
+) -> PreflightReport:
+    try:
+        from bleak import BleakClient, BleakScanner
+    except ImportError as exc:
+        raise phase1_ble_info.Phase1Error("Bleakがありません") from exc
+    target = await _scan_target(
+        BleakScanner,
+        timeout=args.scan_timeout,
+        device_uuid=getattr(args, "device_uuid", None),
+    )
+    factory = phase1_ble_info.make_bleak_client_factory(BleakClient)
+    async with factory(target.device, timeout=args.connect_timeout) as client:
+        return await execute_on_client(
+            client,
+            advertised_name=target.advertised_name,
+            image=image,
+            data=data,
+            operation_timeout=args.operation_timeout,
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.execute and not args.confirm_sha256:
+        print("error: --executeには--confirm-sha256が必要です", file=sys.stderr)
+        return 2
     timeouts = (
         args.scan_timeout,
         args.connect_timeout,
@@ -250,14 +382,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         data = Path(args.firmware).read_bytes()
         image = firmware_image.validate_image(data)
+        if args.execute and args.confirm_sha256 != image.profile.sha256:
+            print("error: --confirm-sha256が対象FWと完全一致しません", file=sys.stderr)
+            return 2
         if args.show_transfer_plan:
+            if args.execute:
+                print(
+                    "error: --show-transfer-planと--executeは併用できません",
+                    file=sys.stderr,
+                )
+                return 2
             print_transfer_plan(image, data)
             return 0
-        report = asyncio.run(_run(args, image))
+        report = asyncio.run(
+            _run_execute(args, image, data) if args.execute else _run(args, image)
+        )
     except (
         OSError,
         firmware_image.ImageValidationError,
         phase1_ble_info.Phase1Error,
+        ExecutePreflightError,
+        gatt_ota.GattOtaError,
     ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -268,6 +413,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 130
     print_report(report)
+    if args.execute:
+        print("Result: OTA送信完了。機器の再起動・再接続を確認してください。")
     return 0
 
 

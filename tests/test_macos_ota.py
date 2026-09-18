@@ -10,17 +10,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from tests.fakes import GattStep, ScriptedGattClient
-from tools import ble_transport
-from tools import firmware_image
+from tools import ble_transport, firmware_image, gatt_ota, ota_protocol, phase1_ble_info
 from tools import macos_ota as ota
-from tools import ota_protocol
-from tools import phase1_ble_info
-
 
 FW_INFO_FRAME = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
 MODEL_INFO_FRAME = bytes.fromhex(
-    "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00"
-    " 00 00 00 00 00 00 00"
+    "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00 00 00 00 00 00 00 00"
 )
 EXPECTED_SERVICES = ("ff00", "ff01", "ff02", "ff03")
 
@@ -130,6 +125,28 @@ class PreflightEvaluationTests(unittest.TestCase):
 
 
 class ParserSafetyTests(unittest.TestCase):
+    def test_cli_execute_requires_exact_target_sha256(self):
+        args = ota.build_parser().parse_args(
+            [
+                "--firmware",
+                "fw.bin",
+                "--execute",
+                "--confirm-sha256",
+                approved_image().profile.sha256,
+            ]
+        )
+
+        self.assertTrue(args.execute)
+        self.assertEqual(args.confirm_sha256, approved_image().profile.sha256)
+
+    def test_cli_execute_without_confirmation_fails_before_ble(self):
+        output = io.StringIO()
+        with redirect_stderr(output):
+            status = ota.main(["--firmware", "unused.bin", "--execute"])
+
+        self.assertEqual(status, 2)
+        self.assertIn("confirm-sha256", output.getvalue())
+
     def test_cli_accepts_show_transfer_plan(self):
         args = ota.build_parser().parse_args(
             ["--firmware", "fw.bin", "--show-transfer-plan"]
@@ -152,9 +169,7 @@ class ParserSafetyTests(unittest.TestCase):
             ) as run,
             redirect_stdout(output),
         ):
-            status = ota.main(
-                ["--firmware", "fw.bin", "--show-transfer-plan"]
-            )
+            status = ota.main(["--firmware", "fw.bin", "--show-transfer-plan"])
 
         self.assertEqual(status, 0)
         validate.assert_called_once_with(data)
@@ -168,30 +183,28 @@ class ParserSafetyTests(unittest.TestCase):
         self.assertIn("Target size: 123916 bytes", rendered)
         self.assertIn("Target full-file sum16: 0xEC27", rendered)
         self.assertIn(
-            "0x27 init-new send: 27 0c e4 01 00 00 "
-            "(host→device; with response)",
+            "0x27 init-new send: 27 0c e4 01 00 00 (host→device; with response)",
             rendered,
         )
         self.assertIn("0x27 state response: ff01 read (device→host)", rendered)
         self.assertIn(
-            "0x25 object-create send: 実機0x27応答で決定 "
-            "(host→device; with response)",
+            "0x25 object-create send: 実機0x27応答で決定 (host→device; with response)",
             rendered,
         )
         self.assertIn("0x25 object ACK: notify待ち (device→host)", rendered)
         self.assertIn(
-            "raw payload send: 実機0x27応答で決定 "
-            "(host→device; without response)",
+            "raw payload send: 実機0x27応答で決定 (host→device; without response)",
             rendered,
         )
         self.assertIn("0x17 PRN ACK: notify待ち (device→host)", rendered)
         self.assertIn(
-            "0x18 upgrade send: version[10]が未確定 "
-            "(host→device; with response)",
+            "0x18 upgrade send: version[10]が未確定 (host→device; with response)",
             rendered,
         )
         self.assertIn("0x18 upgrade ACK: notify待ち (device→host)", rendered)
-        self.assertIn("0x22 reset send: 22 00 (host→device; without response)", rendered)
+        self.assertIn(
+            "0x22 reset send: 22 00 (host→device; without response)", rendered
+        )
         self.assertIn("Executable: no", rendered)
         self.assertIn("version[10]が未確定", rendered)
         self.assertIn("retransmit endpointが未確定", rendered)
@@ -222,14 +235,93 @@ import tools.macos_ota
     def test_cli_has_no_execute_or_state_changing_options(self):
         parser = ota.build_parser()
 
-        for option in ("--execute", "--erase", "--reset", "--chunk-size", "--resume"):
-            with self.subTest(option=option), redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit):
-                    parser.parse_args(["--firmware", "fw.bin", option])
+        for option in ("--erase", "--reset", "--chunk-size", "--resume"):
+            with (
+                self.subTest(option=option),
+                redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit),
+            ):
+                parser.parse_args(["--firmware", "fw.bin", option])
 
         help_text = parser.format_help().lower()
-        for term in ("execute", "erase", "reset", "chunk", "resume"):
+        for term in ("erase", "reset", "chunk", "resume"):
             self.assertNotIn(term, help_text)
+
+
+class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_execute_uses_preflight_vendor_model_to_authorize_same_client(self):
+        client = object()
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model="B077T_US_13",
+            current_ota_version="1.0",
+            current_ota_checksum=0x6162,
+            target_image_kind="global",
+            target_full_file_sum16=0xEC27,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+        )
+        engine = SimpleNamespace(flash=AsyncMock())
+        data = b"approved-data"
+
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ) as preflight,
+            patch.object(
+                gatt_ota, "authorize_firmware", return_value=object()
+            ) as authorize,
+            patch.object(
+                gatt_ota, "GattOtaEngine", return_value=engine
+            ) as engine_class,
+        ):
+            await ota.execute_on_client(
+                client,
+                advertised_name="Cube Pocket Keyboard 3",
+                image=approved_image(),
+                data=data,
+                operation_timeout=5,
+            )
+
+        self.assertIs(preflight.await_args.args[0], client)
+        authorize.assert_called_once_with(data, "B077T_US_13", recovery=False)
+        engine_class.assert_called_once_with(client, operation_timeout=5)
+        engine.flash.assert_awaited_once()
+
+    async def test_execute_refuses_when_same_session_preflight_has_blocker(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model=None,
+            current_ota_version="1.0",
+            current_ota_checksum=0x6162,
+            target_image_kind="global",
+            target_full_file_sum16=0xEC27,
+            checksums_comparable=False,
+            ready_for_future_flash=False,
+            blockers=("Vendor OTA model B077Tを確認できません",),
+        )
+
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            patch.object(gatt_ota, "GattOtaEngine") as engine_class,
+            self.assertRaises(ota.ExecutePreflightError),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 3",
+                image=approved_image(),
+                data=b"approved-data",
+                operation_timeout=5,
+            )
+
+        engine_class.assert_not_called()
 
     def test_cli_accepts_only_firmware_and_three_timeouts(self):
         args = ota.build_parser().parse_args(
@@ -261,9 +353,7 @@ import tools.macos_ota
                 with self.subTest(option=option, value=value):
                     stderr = io.StringIO()
                     with redirect_stderr(stderr):
-                        status = ota.main(
-                            ["--firmware", "unused.bin", option, value]
-                        )
+                        status = ota.main(["--firmware", "unused.bin", option, value])
 
                     self.assertEqual(status, 2)
                     self.assertIn("timeout", stderr.getvalue())

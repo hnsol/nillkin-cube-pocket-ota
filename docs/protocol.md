@@ -13,7 +13,20 @@
 確認済みraw応答は、`0x10`: `0e 02 10 00`、`0x23`: `0e 09 23 00 31 2e 30 00 00 62 61`です。後者はversion `1.0`、checksum `0x6162`として解析されます。このchecksumはimageのsum16と同一とは扱いません。
 `0x2A`のcountが1以上の場合だけ`0x2B`を送り、model名をNUL終端ASCIIとして読みます。配布GLOBAL FW内のidentity文字列は12-byte NUL paddedの`B077T_US_13`です。ASCII不正、空、`B077T`で始まらない値はfail-closedにします。PixArt fwupd一次資料もmodel名をresponse offset 6から12 bytes読みますが、fwupdは別transportであり、このBLE手順そのものの根拠ではありません。
 
-firmware転送、finalization、reset、recoveryに関するcommandは、いずれも未実装です。
+## macOS CLI
+
+通常はread-onlyです。`tools.macos_ota`は`--execute`なしではPhase 1情報を取得するだけで、
+FWを送信しません。実行時も、承認済みGLOBAL/JP_LANG imageのSHA-256を
+`--confirm-sha256`へ完全一致で渡す必要があります。
+
+`--execute`ではscan後の**同一BLE接続**でGATT情報、`0x23`、`0x2B`を再取得します。
+advertised name、`PAR2801`、`B077T` model、必須GATT構成、image hashがすべて通過した時だけ
+`GattOtaEngine`へ送信を委譲します。CoreBluetooth UUIDは`--device-uuid`でscan対象を絞る用途だけであり、
+本人性の判定には使いません。
+
+`tools.macos_recover`は承認済みGLOBAL imageだけを許す薄い復旧CLIです。同じ確認と
+`--execute --confirm-sha256 <GLOBALのhash>`を必要とします。BLE広告が失われた完全brick状態は
+このCLIでは復旧できません。
 
 ## 静的転送計画
 
@@ -27,5 +40,6 @@ Windows OTAUtilityの解析で確認したnew flowのoperationは、`0x27` init-
 `0x18` upgrade ACKはdeviceからのnotifyを待ちます。`0x17` PRN ACKもdeviceからの
 notifyです。raw payloadと`0x22` resetだけはhostからwithout-responseで送信します。
 ただしobject size、payload chunk size、PRN間隔、resume位置は実機の`0x27`応答で
-決まります。`0x18`の`version[10]`の出所と`0x28` retransmitの専用characteristicは
-未確定です。そのため表示は常に`Executable: no`となり、実機へは何も送信しません。
+決まります。`GattOtaEngine`はその応答を検証してから送信します。`0x18` versionは
+OTAUtility設定から確認した`1.0.1`、retransmitは`ff02`の`0x28`を使います。
+`--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。
