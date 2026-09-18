@@ -1,9 +1,8 @@
 """Transport-neutral PixArt OTA wire protocol and transfer planner."""
 
+import struct
 from collections.abc import Iterator
 from dataclasses import dataclass
-import struct
-
 
 MAX_OBJECT_SIZE = 4096
 
@@ -168,20 +167,16 @@ def iter_transfer_operations(
         )
         yield TransferOperation("wait-object", expected_opcode=0x25)
 
-        chunks_since_ack = 0
         for chunk_start in range(0, len(object_data), state.mtu_size):
             chunk = object_data[chunk_start : chunk_start + state.mtu_size]
             running_checksum = (running_checksum + sum(chunk)) & 0xFFFF
             yield TransferOperation("payload", chunk)
-            chunks_since_ack += 1
             object_ended = chunk_start + len(chunk) == len(object_data)
-            if chunks_since_ack == state.prn_threshold or object_ended:
-                yield TransferOperation(
-                    "wait-prn",
-                    expected_opcode=0x17,
-                    expected_checksum=running_checksum,
-                )
-                chunks_since_ack = 0
+            yield TransferOperation(
+                "wait-prn",
+                expected_opcode=0x17,
+                expected_checksum=running_checksum if object_ended else None,
+            )
 
     yield TransferOperation("upgrade", upgrade_payload)
     yield TransferOperation("wait-upgrade", expected_opcode=0x18)

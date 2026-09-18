@@ -130,6 +130,7 @@ class TransferPlanningTests(unittest.TestCase):
                 ),
                 ota.TransferOperation("wait-object", expected_opcode=0x25),
                 ota.TransferOperation("payload", b"\x01\x02\x03"),
+                ota.TransferOperation("wait-prn", expected_opcode=0x17),
                 ota.TransferOperation("payload", b"\x04"),
                 ota.TransferOperation(
                     "wait-prn", expected_opcode=0x17, expected_checksum=10
@@ -154,7 +155,7 @@ class TransferPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_plan_inserts_prn_ack_at_threshold_and_object_end(self):
+    def test_plan_waits_for_every_chunk_and_checks_only_object_end_checksum(self):
         operations = list(
             ota.iter_transfer_operations(
                 bytes(range(1, 9)),
@@ -166,9 +167,9 @@ class TransferPlanningTests(unittest.TestCase):
         self.assertEqual(
             waits,
             [
-                ota.TransferOperation(
-                    "wait-prn", expected_opcode=0x17, expected_checksum=21
-                ),
+                ota.TransferOperation("wait-prn", expected_opcode=0x17),
+                ota.TransferOperation("wait-prn", expected_opcode=0x17),
+                ota.TransferOperation("wait-prn", expected_opcode=0x17),
                 ota.TransferOperation(
                     "wait-prn", expected_opcode=0x17, expected_checksum=36
                 ),
@@ -209,7 +210,10 @@ class TransferPlanningTests(unittest.TestCase):
                     bytes.fromhex("25 00 00 00 00 04 00 00 00"),
                 )
                 wait = next(
-                    operation for operation in operations if operation.kind == "wait-prn"
+                    operation
+                    for operation in operations
+                    if operation.kind == "wait-prn"
+                    and operation.expected_checksum is not None
                 )
                 self.assertEqual(wait.expected_checksum, 10)
 

@@ -144,8 +144,10 @@ class FakeGattClient:
         reads: list[bytes],
         notify_after_write: dict[bytes, list[bytes]] | None = None,
         notify_burst_after_write: dict[bytes, list[bytes]] | None = None,
+        mtu_size: int = 247,
     ) -> None:
         self.is_connected = True
+        self.mtu_size = mtu_size
         self.events: list[tuple] = []
         self._reads = deque(reads)
         self._notifications = defaultdict(deque)
@@ -213,6 +215,13 @@ class SlowGattClient(FakeGattClient):
         return await super().read_gatt_char(characteristic)
 
 
+class SlowPayloadGattClient(FakeGattClient):
+    async def write_gatt_char(self, characteristic, data, *, response):
+        if not response:
+            await asyncio.sleep(1)
+        await super().write_gatt_char(characteristic, data, response=response)
+
+
 class FirstStartBlockingGattClient(FakeGattClient):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -271,6 +280,129 @@ def small_transfer_client(
 
 
 class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_each_payload_chunk_waits_for_ack_and_only_object_end_checks_sum(self):
+        firmware = b"\x01\x02\x03\x04"
+        upgrade = bytes.fromhex("18 04000000 0a00 312e302e310000000000")
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=99)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
+                b"\x01\x02": [bytes.fromhex("17 ffff")],
+                b"\x03\x04": [bytes.fromhex("17 0a00")],
+                upgrade: [bytes.fromhex("18 0000")],
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        ).flash(authorize(firmware))
+
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_host_wnr_limit_rejects_device_chunk_before_object_or_payload(self):
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=21, prn_threshold=1)],
+            mtu_size=23,
+        )
+        engine = gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"device.*mtu_size=21.*host WNR limit=20",
+        ):
+            await engine.flash(authorize(b"\x01\x02"))
+
+        self.assertEqual(engine.last_state.mtu_size, 21)
+        self.assertEqual(engine.host_wnr_limit, 20)
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(bytes.fromhex("25 00000000 04000000"), writes)
+        self.assertNotIn(b"\x01\x02", writes)
+        self.assertNotIn(b"\x18", b"".join(writes))
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_invalid_or_missing_host_mtu_fails_closed_before_object(self):
+        for host_mtu in (None, True, 3, "247"):
+            with self.subTest(host_mtu=host_mtu):
+                client = FakeGattClient(reads=[init_response()])
+                if host_mtu is None:
+                    del client.mtu_size
+                else:
+                    client.mtu_size = host_mtu
+                engine = gatt_ota.GattOtaEngine(
+                    client,
+                    settle_seconds=0,
+                    operation_timeout=0.1,
+                    ack_timeout=0.1,
+                )
+
+                with self.assertRaisesRegex(
+                    gatt_ota.GattProtocolError, "host WNR limit"
+                ):
+                    await engine.flash(authorize(b"\x01\x02"))
+
+                writes = [event[2] for event in client.events if event[0] == "write"]
+                self.assertNotIn(bytes.fromhex("25 00000000 04000000"), writes)
+                self.assertNotIn(b"\x01\x02", writes)
+                self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_payload_ack_timeout_reports_chunk_and_never_finalizes(self):
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattTimeoutError,
+            r"object 0 chunk 0 length 2 expected ACK 0x17.*"
+            r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
+            r"prn_threshold=1.*host WNR limit=244",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(bytes.fromhex("18 02000000 0300 312e302e310000000000"), writes)
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_payload_write_timeout_reports_state_and_never_finalizes(self):
+        client = SlowPayloadGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattTimeoutError,
+            r"object 0 chunk 0 length 2 payload write.*"
+            r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
+            r"prn_threshold=1.*host WNR limit=244",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.01,
+                ack_timeout=0.1,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(bytes.fromhex("18 02000000 0300 312e302e310000000000"), writes)
+        self.assertNotIn(b"\x22\x00", writes)
+
     async def test_cleanup_failure_after_success_is_reported(self):
         firmware = b"\x01\x02"
         object_create = bytes.fromhex("25 00000000 04000000")
@@ -622,6 +754,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             {"ack_timeout": 0},
             {"ack_timeout": -1},
             {"settle_seconds": -1},
+            {"chunk_pacing_seconds": -1},
         ):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 gatt_ota.GattOtaEngine(client, **options)
@@ -640,6 +773,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             reads=[init_response()],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
+                b"\x01\x02": [bytes.fromhex("17 03 00")],
                 b"\x03\x04": [bytes.fromhex("17 0a 00")],
                 bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
@@ -740,6 +874,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             ],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
+                b"\x01\x02": [bytes.fromhex("17 03 00")],
                 b"\x03\x04": [bytes.fromhex("17 0a 00")],
                 bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],

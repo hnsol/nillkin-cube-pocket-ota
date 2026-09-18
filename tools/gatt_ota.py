@@ -6,7 +6,7 @@ import asyncio
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Never
 
 if __package__:
     from . import firmware_image, keymap_config, phase3_build_patch, pixart_ota
@@ -133,11 +133,13 @@ class GattOtaEngine:
         control_characteristic: Any = CONTROL_CHARACTERISTIC,
         retransmit_characteristic: Any = RETRANSMIT_CHARACTERISTIC,
         settle_seconds: float = 0.03,
+        chunk_pacing_seconds: float = 0.001,
         operation_timeout: float = 5.0,
         ack_timeout: float = 10.0,
     ) -> None:
         for name, value, allow_zero in (
             ("settle_seconds", settle_seconds, True),
+            ("chunk_pacing_seconds", chunk_pacing_seconds, True),
             ("operation_timeout", operation_timeout, False),
             ("ack_timeout", ack_timeout, False),
         ):
@@ -154,10 +156,13 @@ class GattOtaEngine:
         self._control = control_characteristic
         self._retransmit = retransmit_characteristic
         self._settle_seconds = settle_seconds
+        self._chunk_pacing_seconds = chunk_pacing_seconds
         self._operation_timeout = operation_timeout
         self._ack_timeout = ack_timeout
         self._notifications: asyncio.Queue[bytes] = asyncio.Queue()
         self._used = False
+        self.last_state: pixart_ota.OtaState | None = None
+        self.host_wnr_limit: int | None = None
 
     @staticmethod
     def _authorized_data(
@@ -244,17 +249,20 @@ class GattOtaEngine:
         except pixart_ota.ProtocolError as exc:
             raise GattProtocolError("invalid init-new response") from exc
 
-    async def _wait_notification(self, expected_opcode: int) -> bytes:
+    async def _wait_notification(
+        self, expected_opcode: int, *, stage: str | None = None
+    ) -> bytes:
+        wait_stage = stage or f"ACK 0x{expected_opcode:02x}"
         frame = bytes(
             await self._bounded(
                 self._notifications.get(),
-                f"ACK 0x{expected_opcode:02x}",
+                wait_stage,
                 self._ack_timeout,
             )
         )
         if not frame or frame[0] != expected_opcode:
             raise GattProtocolError(
-                f"unexpected ACK while waiting for 0x{expected_opcode:02x}"
+                f"unexpected ACK during {wait_stage}"
             )
         return frame
 
@@ -265,33 +273,108 @@ class GattOtaEngine:
             except asyncio.QueueEmpty:
                 return
 
+    @staticmethod
+    def _state_diagnostics(state: pixart_ota.OtaState) -> str:
+        return (
+            f"offset={state.offset}, checksum=0x{state.checksum:04X}, "
+            f"max_object_size={state.max_object_size}, mtu_size={state.mtu_size}, "
+            f"prn_threshold={state.prn_threshold}"
+        )
+
+    def _validate_host_wnr_limit(self, state: pixart_ota.OtaState) -> None:
+        host_mtu = getattr(self._client, "mtu_size", None)
+        if (
+            not isinstance(host_mtu, int)
+            or isinstance(host_mtu, bool)
+            or host_mtu <= 3
+        ):
+            raise GattProtocolError(
+                "host WNR limit is unavailable or invalid; "
+                + self._state_diagnostics(state)
+            )
+        self.host_wnr_limit = host_mtu - 3
+        if state.mtu_size > self.host_wnr_limit:
+            raise GattProtocolError(
+                f"device mtu_size={state.mtu_size} exceeds host WNR "
+                f"limit={self.host_wnr_limit}; {self._state_diagnostics(state)}"
+            )
+
+    def _chunk_diagnostics(
+        self,
+        state: pixart_ota.OtaState,
+        object_index: int,
+        chunk_index: int,
+        chunk_length: int,
+        stage: str,
+    ) -> str:
+        return (
+            f"object {object_index} chunk {chunk_index} length {chunk_length} "
+            f"{stage}; {self._state_diagnostics(state)}; "
+            f"host WNR limit={self.host_wnr_limit}"
+        )
+
+    @staticmethod
+    def _raise_with_context(error: GattOtaError, context: str) -> Never:
+        raise type(error)(f"{context}: {error}") from error
+
     async def _run_transfer(self, firmware: bytes, state: pixart_ota.OtaState) -> None:
-        prn_window_start = True
+        object_index = state.offset - 1
+        chunk_index = -1
+        chunk_length = 0
         for operation in pixart_ota.iter_transfer_operations(
             firmware, state, OTA_VERSION
         ):
             if operation.kind == "object-create":
                 self._drain_notifications()
-                prn_window_start = True
+                object_index += 1
+                chunk_index = -1
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-object":
                 await self._wait_notification(0x25)
             elif operation.kind == "payload":
-                if prn_window_start:
-                    self._drain_notifications()
-                    prn_window_start = False
-                await self._write(self._control, operation.payload, response=False)
+                self._drain_notifications()
+                chunk_index += 1
+                chunk_length = len(operation.payload)
+                write_context = self._chunk_diagnostics(
+                    state,
+                    object_index,
+                    chunk_index,
+                    chunk_length,
+                    "payload write",
+                )
+                try:
+                    await self._write(
+                        self._control, operation.payload, response=False
+                    )
+                except GattOtaError as exc:
+                    self._raise_with_context(exc, write_context)
             elif operation.kind == "wait-prn":
-                frame = await self._wait_notification(0x17)
+                ack_stage = self._chunk_diagnostics(
+                    state,
+                    object_index,
+                    chunk_index,
+                    chunk_length,
+                    "expected ACK 0x17",
+                )
+                try:
+                    frame = await self._wait_notification(0x17)
+                except GattOtaError as exc:
+                    self._raise_with_context(exc, ack_stage)
                 if len(frame) == 3:
                     checksum = int.from_bytes(frame[1:3], "little")
                 elif len(frame) == 4:
                     checksum = int.from_bytes(frame[2:4], "little")
                 else:
-                    raise GattProtocolError("malformed checksum ACK")
-                if checksum != operation.expected_checksum:
-                    raise GattProtocolError("running checksum ACK does not match")
-                prn_window_start = True
+                    raise GattProtocolError(f"malformed checksum ACK during {ack_stage}")
+                if (
+                    operation.expected_checksum is not None
+                    and checksum != operation.expected_checksum
+                ):
+                    raise GattProtocolError(
+                        f"running checksum ACK does not match during {ack_stage}"
+                    )
+                await asyncio.sleep(self._chunk_pacing_seconds)
+                self._ensure_connected("payload pacing")
             elif operation.kind == "upgrade":
                 self._drain_notifications()
                 await self._write(self._control, operation.payload, response=True)
@@ -357,6 +440,8 @@ class GattOtaEngine:
                 self._retransmit, pixart_ota.build_retransmit(), response=True
             )
             state = await self._read_state(len(data))
+            self.last_state = state
+            self._validate_host_wnr_limit(state)
             if state.offset != 0 or state.checksum != 0:
                 raise GattProtocolError("retransmit did not clear resume state")
             await self._run_transfer(data, state)
@@ -375,11 +460,15 @@ class GattOtaEngine:
             await self._start_notifications()
             subscribed = True
             state = await self._read_state(len(data))
+            self.last_state = state
+            self._validate_host_wnr_limit(state)
             if not self._resume_matches(data, state):
                 await self._write(
                     self._retransmit, pixart_ota.build_retransmit(), response=True
                 )
                 state = await self._read_state(len(data))
+                self.last_state = state
+                self._validate_host_wnr_limit(state)
                 if state.offset != 0 or state.checksum != 0:
                     raise GattProtocolError(
                         "retransmit did not establish zero recovery state"
