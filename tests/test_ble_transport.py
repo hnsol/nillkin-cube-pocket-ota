@@ -85,7 +85,9 @@ class ExchangeFailureTests(unittest.IsolatedAsyncioTestCase):
             HangingClient([]), "ff01", settle_seconds=0, operation_timeout=0.01
         )
 
-        with self.assertRaises(ble.TransportTimeoutError):
+        with self.assertRaisesRegex(
+            ble.TransportTimeoutError, r"write 0x23 timed out"
+        ):
             await transport.exchange(protocol.READ_ONLY_COMMANDS[0x23])
 
     async def test_exchange_converts_disconnect_to_disconnected_error(self):

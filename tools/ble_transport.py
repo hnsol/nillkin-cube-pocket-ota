@@ -120,7 +120,7 @@ class BleTransport:
             self._client.write_gatt_char(
                 self._characteristic, spec.request, response=response
             ),
-            "write",
+            f"write 0x{spec.opcode:02x}",
         )
         self._ensure_connected("after write")
         await self._wait_for(
@@ -131,7 +131,7 @@ class BleTransport:
         raw = bytes(
             await self._wait_for(
                 self._client.read_gatt_char(self._characteristic),
-                "read",
+                f"read 0x{spec.opcode:02x}",
             )
         )
         self._ensure_connected("after read")
