@@ -78,4 +78,13 @@ payload dispatch順も通知に記録し、boundaryより前のwriteに対応す
 診断用に`0x27`のoffset/checksum/max object size/MTU/PRN threshold、host上限、effective
 payload chunk sizeをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
 object/payload位置とWNR readinessのfalse観測回数・累積待機時間を含めます。
+
+vendor実装はraw payloadをWNRで送りますが、macOS実機ではWNR上限20/47 bytes、WR上限
+512 bytesを観測しています。`--corebluetooth-long-write`は`--execute`専用の明示的な
+実験オプションで、raw payloadだけをdeviceの`mtu_size`単位のWRで`ff01`へ送ります。
+native peripheralの`maximumWriteValueLengthForType(CBCharacteristicWriteWithResponse)`を
+取得し、deviceの`mtu_size`以上であることをobject-create前に検証します。非CoreBluetooth、
+内部API取得不能、不正値、上限不足はfail-closedです。object/ACK/checksum/upgrade/resetの
+modeと検証は変えません。診断にはpayload mode、WR上限、chunk sizeを含めます。
+このWR経路は実機未検証です。
 `--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。

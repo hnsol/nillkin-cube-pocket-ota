@@ -260,6 +260,7 @@ async def execute_on_client(
     operation_timeout: float,
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
+    corebluetooth_long_write: bool = False,
 ) -> PreflightReport:
     """Authorize and flash only after a fresh probe on this exact connection."""
     if accept_factory_signature and probe_vendor_model:
@@ -309,9 +310,10 @@ async def execute_on_client(
             config=config,
             recovery=False,
         )
-    await gatt_ota.GattOtaEngine(client, operation_timeout=operation_timeout).flash(
-        authorized
-    )
+    engine_options: dict[str, Any] = {"operation_timeout": operation_timeout}
+    if corebluetooth_long_write:
+        engine_options["corebluetooth_long_write"] = True
+    await gatt_ota.GattOtaEngine(client, **engine_options).flash(authorized)
     return report
 
 
@@ -412,6 +414,14 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="承認済みFWの静的OTA転送計画だけを表示する（BLE未接続）",
     )
+    parser.add_argument(
+        "--corebluetooth-long-write",
+        action="store_true",
+        help=(
+            "--execute時だけraw payloadをCoreBluetoothの"
+            "write-with-responseで送る実験オプション"
+        ),
+    )
     return parser
 
 
@@ -499,11 +509,20 @@ async def _run_execute(
             accept_factory_signature=getattr(
                 args, "accept_factory_signature", False
             ),
+            corebluetooth_long_write=getattr(
+                args, "corebluetooth_long_write", False
+            ),
         )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.corebluetooth_long_write and not args.execute:
+        print(
+            "error: --corebluetooth-long-writeは--execute時だけ指定できます",
+            file=sys.stderr,
+        )
+        return 2
     if args.accept_factory_signature and not args.execute:
         print(
             "error: --accept-factory-signatureは--execute時だけ指定できます",

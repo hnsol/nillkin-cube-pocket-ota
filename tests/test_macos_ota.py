@@ -205,6 +205,27 @@ class PreflightEvaluationTests(unittest.TestCase):
 
 
 class ParserSafetyTests(unittest.TestCase):
+    def test_cli_accepts_long_write_only_for_execute(self):
+        args = ota.build_parser().parse_args(
+            [
+                "--firmware",
+                "fw.bin",
+                "--execute",
+                "--confirm-sha256",
+                approved_image().profile.sha256,
+                "--corebluetooth-long-write",
+            ]
+        )
+        self.assertTrue(args.corebluetooth_long_write)
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            status = ota.main(
+                ["--firmware", "unused.bin", "--corebluetooth-long-write"]
+            )
+        self.assertEqual(status, 2)
+        self.assertIn("execute", stderr.getvalue())
+
     def test_cli_accepts_factory_signature_and_vendor_probe_flags(self):
         factory = ota.build_parser().parse_args(
             ["--firmware", "fw.bin", "--accept-factory-signature"]
@@ -562,6 +583,46 @@ class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
         engine_class.assert_called_once_with(client, operation_timeout=5)
         engine.flash.assert_awaited_once()
 
+    async def test_execute_forwards_explicit_long_write_to_engine(self):
+        client = object()
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model="B077T_US_13",
+            current_ota_version="1.0",
+            current_ota_checksum=0x6162,
+            target_image_kind="global",
+            target_full_file_sum16=0xEC27,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+        )
+        engine = SimpleNamespace(flash=AsyncMock())
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            patch.object(gatt_ota, "authorize_firmware", return_value=object()),
+            patch.object(
+                gatt_ota, "GattOtaEngine", return_value=engine
+            ) as engine_class,
+        ):
+            await ota.execute_on_client(
+                client,
+                advertised_name="Cube Pocket Keyboard 3",
+                image=approved_image(),
+                data=b"approved-data",
+                operation_timeout=5,
+                corebluetooth_long_write=True,
+            )
+
+        engine_class.assert_called_once_with(
+            client,
+            operation_timeout=5,
+            corebluetooth_long_write=True,
+        )
+
     async def test_execute_refuses_when_same_session_preflight_has_blocker(self):
         report = ota.PreflightReport(
             advertised_name="Cube Pocket Keyboard 3",
@@ -850,6 +911,7 @@ class CliDiscoveryTests(unittest.IsolatedAsyncioTestCase):
             device_uuid=None,
             probe_vendor_model=True,
             accept_factory_signature=False,
+            corebluetooth_long_write=True,
         )
         fake_bleak = SimpleNamespace(BleakClient=object, BleakScanner=object)
 
@@ -867,6 +929,7 @@ class CliDiscoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(execute.await_args.kwargs["probe_vendor_model"])
         self.assertFalse(execute.await_args.kwargs["accept_factory_signature"])
+        self.assertTrue(execute.await_args.kwargs["corebluetooth_long_write"])
 
 
 if __name__ == "__main__":

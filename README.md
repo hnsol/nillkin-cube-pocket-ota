@@ -67,6 +67,13 @@ python3 -m tools.macos_ota \
 
 `--execute`は、同一接続上で再取得したadvertised name、`PAR2801`、`B077T` model、GATT構成を検証してから送信します。さらに、対象ファイルのSHA-256を明示確認しなければ動きません。
 
+vendor実装のraw payloadはwrite-without-response（WNR）です。一方、macOS実機では
+WNR上限が20/47 bytes、write-with-response（WR）上限が512 bytesと観測されました。
+`--corebluetooth-long-write`は、`--execute`と併用した場合だけdeviceの`mtu_size`
+単位でraw payloadをWR送信する明示的な実験オプションです。native CoreBluetoothの
+WR上限がdeviceの`mtu_size`未満、または取得不能ならobject-create前に停止します。
+このWR経路は実機未検証です。
+
 工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えず、`--probe-vendor-model`とも併用できません。
 
 手順1: 工場出荷FWから固定GLOBALへ更新します。コマンドを示すだけで、自動実行はしません。

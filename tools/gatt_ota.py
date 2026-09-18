@@ -20,6 +20,7 @@ else:
 CONTROL_CHARACTERISTIC = "ff01"
 RETRANSMIT_CHARACTERISTIC = "ff02"
 OTA_VERSION = "1.0.1"
+_CB_CHARACTERISTIC_WRITE_WITH_RESPONSE = 0
 _NOTIFICATION_OPCODES = frozenset({0x17, 0x18, 0x25})
 _AUTHORIZATION_TOKEN = object()
 
@@ -136,6 +137,7 @@ class GattOtaEngine:
         chunk_pacing_seconds: float = 0.002,
         operation_timeout: float = 5.0,
         ack_timeout: float = 10.0,
+        corebluetooth_long_write: bool = False,
     ) -> None:
         for name, value, allow_zero in (
             ("settle_seconds", settle_seconds, True),
@@ -159,11 +161,18 @@ class GattOtaEngine:
         self._chunk_pacing_seconds = chunk_pacing_seconds
         self._operation_timeout = operation_timeout
         self._ack_timeout = ack_timeout
+        self._corebluetooth_long_write = corebluetooth_long_write
         self._notifications: asyncio.Queue[tuple[bytes, int]] = asyncio.Queue()
         self._payload_dispatch_counter = 0
         self._used = False
         self.last_state: pixart_ota.OtaState | None = None
+        self.payload_mode = (
+            "write-with-response"
+            if corebluetooth_long_write
+            else "write-without-response"
+        )
         self.host_wnr_limit: int | None = None
+        self.host_wr_limit: int | None = None
         self.effective_payload_chunk_size: int | None = None
         self.wnr_ready_false_count = 0
         self.wnr_ready_wait_seconds = 0.0
@@ -230,12 +239,15 @@ class GattOtaEngine:
 
     async def _write_payload(self, payload: bytes) -> None:
         stage = f"write 0x{payload[0]:02x}"
-        await self._wait_for_wnr_ready(stage)
+        if not self._corebluetooth_long_write:
+            await self._wait_for_wnr_ready(stage)
 
         async def dispatch_payload() -> None:
             self._payload_dispatch_counter += 1
             await self._client.write_gatt_char(
-                self._control, payload, response=False
+                self._control,
+                payload,
+                response=self._corebluetooth_long_write,
             )
 
         await self._bounded(dispatch_payload(), stage)
@@ -394,6 +406,61 @@ class GattOtaEngine:
         )
         return self.effective_payload_chunk_size
 
+    def _validate_corebluetooth_wr_limit(
+        self, state: pixart_ota.OtaState
+    ) -> int:
+        backend_id = getattr(self._client, "backend_id", None)
+        if getattr(backend_id, "value", backend_id) != "core_bluetooth":
+            raise GattOtaError(
+                "CoreBluetooth WR mode requires the CoreBluetooth backend"
+            )
+        missing = object()
+        backend = getattr(self._client, "_backend", missing)
+        peripheral = getattr(backend, "_peripheral", missing)
+        if peripheral is missing:
+            raise GattOtaError(
+                "CoreBluetooth WR peripheral path is unavailable"
+            )
+        maximum_length = getattr(
+            peripheral, "maximumWriteValueLengthForType_", None
+        )
+        if not callable(maximum_length):
+            raise GattOtaError("CoreBluetooth WR limit API is unavailable")
+        try:
+            host_wr_limit = maximum_length(
+                _CB_CHARACTERISTIC_WRITE_WITH_RESPONSE
+            )
+        except Exception as exc:
+            raise GattOtaError(
+                f"CoreBluetooth WR limit query failed: {exc}"
+            ) from exc
+        if (
+            not isinstance(host_wr_limit, int)
+            or isinstance(host_wr_limit, bool)
+        ):
+            raise GattProtocolError(
+                "host WR limit is unavailable or invalid; "
+                f"payload mode={self.payload_mode}; "
+                f"host WR limit={host_wr_limit!r}; "
+                + self._state_diagnostics(state)
+            )
+        self.host_wr_limit = host_wr_limit
+        self.effective_payload_chunk_size = state.mtu_size
+        if host_wr_limit < state.mtu_size:
+            raise GattProtocolError(
+                "host WR limit is smaller than device mtu_size; "
+                f"payload mode={self.payload_mode}; "
+                f"host WR limit={host_wr_limit}; "
+                f"effective payload chunk size={self.effective_payload_chunk_size}; "
+                + self._state_diagnostics(state)
+            )
+        return state.mtu_size
+
+    def _validate_payload_transport(self, state: pixart_ota.OtaState) -> int:
+        if self._corebluetooth_long_write:
+            return self._validate_corebluetooth_wr_limit(state)
+        return self._validate_host_wnr_limit(state)
+
     def _chunk_diagnostics(
         self,
         state: pixart_ota.OtaState,
@@ -405,7 +472,9 @@ class GattOtaEngine:
         return (
             f"object {object_index} payload {chunk_index} length {chunk_length} "
             f"{stage}; {self._state_diagnostics(state)}; "
+            f"payload mode={self.payload_mode}; "
             f"host WNR limit={self.host_wnr_limit}; "
+            f"host WR limit={self.host_wr_limit}; "
             f"effective payload chunk size={self.effective_payload_chunk_size}; "
             f"WNR readiness false observations={self.wnr_ready_false_count}; "
             f"WNR readiness wait={self.wnr_ready_wait_seconds:.6f}s"
@@ -554,7 +623,7 @@ class GattOtaEngine:
             )
             state = await self._read_state(len(data))
             self.last_state = state
-            payload_chunk_size = self._validate_host_wnr_limit(state)
+            payload_chunk_size = self._validate_payload_transport(state)
             if state.offset != 0 or state.checksum != 0:
                 raise GattProtocolError("retransmit did not clear resume state")
             await self._run_transfer(data, state, payload_chunk_size)
@@ -574,14 +643,14 @@ class GattOtaEngine:
             subscribed = True
             state = await self._read_state(len(data))
             self.last_state = state
-            payload_chunk_size = self._validate_host_wnr_limit(state)
+            payload_chunk_size = self._validate_payload_transport(state)
             if not self._resume_matches(data, state):
                 await self._write(
                     self._retransmit, pixart_ota.build_retransmit(), response=True
                 )
                 state = await self._read_state(len(data))
                 self.last_state = state
-                payload_chunk_size = self._validate_host_wnr_limit(state)
+                payload_chunk_size = self._validate_payload_transport(state)
                 if state.offset != 0 or state.checksum != 0:
                     raise GattProtocolError(
                         "retransmit did not establish zero recovery state"

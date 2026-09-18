@@ -287,8 +287,9 @@ class RaiseOnResetGattClient(FakeGattClient):
 
 
 class CoreBluetoothPeripheral:
-    def __init__(self, ready: list[object]) -> None:
+    def __init__(self, ready: list[object], *, wr_limit: object = 512) -> None:
         self.ready = deque(ready)
+        self.wr_limit = wr_limit
         self.events: list[tuple] = []
 
     def canSendWriteWithoutResponse(self):
@@ -300,13 +301,19 @@ class CoreBluetoothPeripheral:
             return value()
         return value
 
+    def maximumWriteValueLengthForType_(self, write_type):
+        self.events.append(("maximum-write-value-length", write_type))
+        if isinstance(self.wr_limit, BaseException):
+            raise self.wr_limit
+        return self.wr_limit
+
 
 class CoreBluetoothGattClient(FakeGattClient):
     backend_id = "core_bluetooth"
 
-    def __init__(self, *, ready: list[object], **kwargs) -> None:
+    def __init__(self, *, ready: list[object], wr_limit: object = 512, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.peripheral = CoreBluetoothPeripheral(ready)
+        self.peripheral = CoreBluetoothPeripheral(ready, wr_limit=wr_limit)
         self._backend = SimpleNamespace(_peripheral=self.peripheral)
 
     async def write_gatt_char(self, characteristic, data, *, response):
@@ -345,6 +352,115 @@ def small_transfer_client(
 
 
 class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_explicit_corebluetooth_long_write_uses_device_mtu_with_response(self):
+        firmware = b"\x01\x02\x03\x04"
+        upgrade = bytes.fromhex("18 04000000 0a00 312e302e310000000000")
+        client = CoreBluetoothGattClient(
+            ready=[],
+            wr_limit=512,
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
+                b"\x03\x04": [bytes.fromhex("17 0a00")],
+                upgrade: [bytes.fromhex("18 0000")],
+            },
+        )
+        engine = gatt_ota.GattOtaEngine(
+            client,
+            corebluetooth_long_write=True,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        )
+
+        await engine.flash(authorize(firmware))
+
+        payload_writes = [
+            event
+            for event in client.events
+            if event[0] == "write" and event[2] in (b"\x01\x02", b"\x03\x04")
+        ]
+        self.assertEqual(
+            payload_writes,
+            [
+                ("write", "ff01", b"\x01\x02", True),
+                ("write", "ff01", b"\x03\x04", True),
+            ],
+        )
+        self.assertIn(("maximum-write-value-length", 0), client.peripheral.events)
+        self.assertEqual(engine.payload_mode, "write-with-response")
+        self.assertEqual(engine.host_wr_limit, 512)
+        self.assertEqual(engine.effective_payload_chunk_size, 2)
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_explicit_long_write_fails_before_object_when_wr_limit_is_too_small(self):
+        client = CoreBluetoothGattClient(
+            ready=[],
+            wr_limit=243,
+            reads=[init_response(max_object_size=4096, mtu_size=244, prn_threshold=16)],
+        )
+
+        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "WR limit"):
+            await gatt_ota.GattOtaEngine(
+                client,
+                corebluetooth_long_write=True,
+                settle_seconds=0,
+                operation_timeout=0.1,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertFalse(any(payload.startswith(b"\x25") for payload in writes))
+        self.assertNotIn(b"\x18", writes)
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_explicit_long_write_requires_corebluetooth_native_wr_api(self):
+        clients = (
+            FakeGattClient(reads=[init_response()]),
+            CoreBluetoothGattClient(ready=[], reads=[init_response()]),
+        )
+        clients[1]._backend._peripheral.maximumWriteValueLengthForType_ = None
+        for client in clients:
+            with self.subTest(client=type(client).__name__):
+                with self.assertRaisesRegex(gatt_ota.GattOtaError, "CoreBluetooth WR"):
+                    await gatt_ota.GattOtaEngine(
+                        client,
+                        corebluetooth_long_write=True,
+                        settle_seconds=0,
+                        operation_timeout=0.1,
+                    ).flash(authorize(b"\x01\x02"))
+
+                writes = [event[2] for event in client.events if event[0] == "write"]
+                self.assertFalse(any(payload.startswith(b"\x25") for payload in writes))
+
+    async def test_long_write_ack_timeout_diagnostics_include_mode_and_wr_limit(self):
+        client = CoreBluetoothGattClient(
+            ready=[],
+            wr_limit=512,
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattTimeoutError,
+            r"payload mode=write-with-response.*host WR limit=512.*"
+            r"effective payload chunk size=2",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                corebluetooth_long_write=True,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
+        self.assertNotIn(b"\x22\x00", writes)
+
     async def test_corebluetooth_payload_waits_for_native_wnr_queue(self):
         client = CoreBluetoothGattClient(
             ready=[False, False, True],
