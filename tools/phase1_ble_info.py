@@ -2,7 +2,7 @@
 """Read Phase 1 BLE information from a Nillkin Cube Pocket keyboard.
 
 This script has no firmware-transfer path.  The only GATT writes it permits are
-the four confirmed read-only information commands.
+the two read-only commands confirmed on the factory firmware.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import re
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -230,20 +231,6 @@ async def collect_phase1_info(
             fw_info = (
                 await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])
             ).raw
-            model_count = (
-                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2A])
-            ).raw
-            try:
-                ota_protocol.parse_model_count(model_count)
-            except ota_protocol.ProtocolError as exc:
-                raise Phase1Error("Get Number Of Model応答の形式が一致しません") from exc
-            model_info = (
-                await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2B])
-            ).raw
-            try:
-                model_identity = ota_protocol.parse_model_info(model_info)
-            except ota_protocol.ProtocolError as exc:
-                raise Phase1Error("Get Model応答の形式が一致しません") from exc
     except Phase1Error:
         raise
     except ble_transport.TransportTimeoutError as exc:
@@ -260,9 +247,9 @@ async def collect_phase1_info(
         fw_info_response=fw_info,
         model_number=model_number,
         firmware_revision=firmware_revision,
-        model_identity=model_identity,
-        model_count_response=model_count,
-        model_info_response=model_info,
+        # The factory firmware accepts 0x10 and 0x23, but times out on the
+        # GLOBAL-image-only 0x2A/0x2B model queries.  Do not probe them here.
+        model_identity=ota_protocol.ModelIdentity.UNAVAILABLE,
     )
 
 
@@ -297,8 +284,6 @@ def print_result(result: Phase1Result) -> None:
         ("ff01 初期read", result.initial_read),
         ("10 00 応答", result.ota_init_response),
         ("23 00 Get F/W Info応答", result.fw_info_response),
-        ("2a 00 Get Number Of Model応答", result.model_count_response),
-        ("2b 00 00 00 00 Get Model応答", result.model_info_response),
     )
     for label, data in responses:
         print(f"{label}: {data.hex(' ') or '(empty)'}")

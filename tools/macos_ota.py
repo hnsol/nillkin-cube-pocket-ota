@@ -171,26 +171,21 @@ async def collect_preflight_on_client(
     )
     await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x10])
     fw_info = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x23])).raw
-    model_count = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2A])).raw
     try:
-        ota_protocol.parse_model_count(model_count)
-    except ota_protocol.ProtocolError as exc:
-        raise phase1_ble_info.Phase1Error(
-            "Get Number Of Model応答の形式が一致しません"
-        ) from exc
-    model_info = (await transport.exchange(ota_protocol.READ_ONLY_COMMANDS[0x2B])).raw
-    try:
-        model = ota_protocol.parse_model_info(model_info)
         current_fw = ota_protocol.parse_firmware_info(fw_info)
     except ota_protocol.ProtocolError as exc:
-        raise phase1_ble_info.Phase1Error("OTA情報応答の形式が一致しません") from exc
+        raise phase1_ble_info.Phase1Error(
+            "Get F/W Info応答の形式が一致しません"
+        ) from exc
     identity = ble_transport.build_identity(
         advertised_name=advertised_name,
         gatt_model=model_number,
         gatt_revision=firmware_revision,
         service_uuids=("ff00", *characteristics.keys()),
     )
-    return evaluate_preflight(identity, model, current_fw, image)
+    return evaluate_preflight(
+        identity, ota_protocol.ModelIdentity.UNAVAILABLE, current_fw, image
+    )
 
 
 async def execute_on_client(

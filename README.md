@@ -21,7 +21,8 @@ pip install -r requirements.txt
 python3 -m tools.macos_ota --firmware firmware/original/B077T_US_13.bin
 ```
 
-通常実行はread-only preflightです。BLE scan、GATT情報、`0x23` firmware info、`0x2B` modelを取得します。FWは送信しません。
+通常実行はread-only preflightです。BLE scan、GATT情報、`0x10` OTA init、`0x23` firmware infoを取得します。FWは送信しません。
+工場出荷FWでは`0x2A` model countが応答せずタイムアウトするため、通常経路では送信しません。このためB077T modelのwrite gateは未達のままで、`--execute`は実行できません。
 実機probeは、接続先と応答を確認できる状態でのみ実行してください。
 
 ## キーマップ設定とpatch生成
@@ -64,7 +65,7 @@ python3 -m tools.macos_ota \
 
 ## OTA書込み
 
-`--execute`は、同一接続上で再取得したadvertised name、`PAR2801`、`B077T` model、GATT構成を検証してから送信します。さらに、対象ファイルのSHA-256を明示確認しなければ動きません。
+`--execute`は、同一接続上で再取得したadvertised name、`PAR2801`、`B077T` model、GATT構成を検証してから送信します。さらに、対象ファイルのSHA-256を明示確認しなければ動きません。現在の工場出荷FWはB077T modelを安全に取得できないため、このgateを満たさず書込みません。
 
 固定JP LANG版の例です。
 

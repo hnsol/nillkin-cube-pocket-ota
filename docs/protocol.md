@@ -6,12 +6,10 @@
 | --- | --- | --- | --- | --- |
 | `0x10` | `10 00` | with response | 4 bytes: `0e`, length, echoed opcode, status `00` | 解析済みOTAUtility挙動。unit testはその挙動を固定 |
 | `0x23` | `23 00` | with response | 11 bytes: `0e`, length, echoed opcode, status `00`, version、checksum | 解析済みOTAUtility挙動。unit testはその挙動を固定 |
-| `0x2A` | `2a 00` | with response | 5 bytes: `0e 03 2a 00 <count>` | GLOBAL FW handler `0x1000df48..0x1000e00e`とresponse builder `0x1000a7ec` |
-| `0x2B` | `2b 00 00 00 00`（index 0） | with response | 25 bytes: `0e 17 2b 00 ...`、model名はoffset 6から最大12 bytes | GLOBAL FW handler `0x1000df48..0x1000e00e`とresponse builder `0x1000a7c8` |
 
 応答は、先頭byte、payload長、echoされたopcode、statusを検証します。
 確認済みraw応答は、`0x10`: `0e 02 10 00`、`0x23`: `0e 09 23 00 31 2e 30 00 00 62 61`です。後者はversion `1.0`、checksum `0x6162`として解析されます。このchecksumはimageのsum16と同一とは扱いません。
-`0x2A`のcountが1以上の場合だけ`0x2B`を送り、model名をNUL終端ASCIIとして読みます。配布GLOBAL FW内のidentity文字列は12-byte NUL paddedの`B077T_US_13`です。ASCII不正、空、`B077T`で始まらない値はfail-closedにします。PixArt fwupd一次資料もmodel名をresponse offset 6から12 bytes読みますが、fwupdは別transportであり、このBLE手順そのものの根拠ではありません。
+`0x2A`/`0x2B`は配布GLOBAL FWの解析ではmodel照会として確認できるものの、工場出荷FWでは`0x2A`がタイムアウトしました。通常のmacOS preflightはこの2 opcodeを送らず、`0x10`と`0x23`だけに限定します。従ってvendor OTA modelはunavailableとして扱い、`B077T` modelを必須とするwrite gateはfail-closedのままです。
 
 ## macOS CLI
 
@@ -22,7 +20,7 @@ FWを送信しません。実行時は固定GLOBAL/JP_LANG imageのSHA-256を
 再生成したbytesが対象と完全一致する場合だけ送信候補にします。これは固定allowlistを
 緩めるものではありません。
 
-`--execute`ではscan後の**同一BLE接続**でGATT情報、`0x23`、`0x2B`を再取得します。
+`--execute`ではscan後の**同一BLE接続**でGATT情報、`0x10`、`0x23`を再取得します。
 advertised name、`PAR2801`、`B077T` model、必須GATT構成、image hashがすべて通過した時だけ
 `GattOtaEngine`へ送信を委譲します。CoreBluetooth UUIDは`--device-uuid`でscan対象を絞る用途だけであり、
 本人性の判定には使いません。
