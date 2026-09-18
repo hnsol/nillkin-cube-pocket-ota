@@ -195,6 +195,24 @@ class PatchingTests(unittest.TestCase):
             images.APPROVED_IMAGES[images.ImageKind.GLOBAL].full_file_sum16,
         )
 
+    @unittest.skipUnless(
+        Path("firmware/original/B077T_US_13.bin").is_file(),
+        "approved GLOBAL fixture unavailable",
+    )
+    def test_configured_target_must_exactly_match_regeneration_from_global(self):
+        base = Path("firmware/original/B077T_US_13.bin").read_bytes()
+        config = keymap_config.KeymapConfig({"caps_lock": 0xE0})
+        target, _ = fw.patch_configured_firmware(base, config)
+
+        image = fw.validate_configured_target(base, target, config)
+
+        self.assertEqual(image.profile.kind, images.ImageKind.CONFIGURED)
+        self.assertEqual(image.profile.sha256, hashlib.sha256(target).hexdigest())
+        corrupted = bytearray(target)
+        corrupted[100] ^= 1
+        with self.assertRaisesRegex(fw.FirmwarePatchError, "does not match"):
+            fw.validate_configured_target(base, bytes(corrupted), config)
+
 
 class FileBuildTests(unittest.TestCase):
     def test_config_name_becomes_a_clear_patched_filename(self):
@@ -215,6 +233,27 @@ class FileBuildTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Validate GLOBAL firmware", result.stdout)
+
+    def test_direct_script_reports_invalid_config_without_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "invalid.toml"
+            config.write_text("format_version = 2\n[remap]\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "tools/phase3_build_patch.py",
+                    "unused.bin",
+                    "--config",
+                    str(config),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("format_version", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_writes_verified_copy_and_patched_firmware_without_altering_input(self):
         with tempfile.TemporaryDirectory() as directory:

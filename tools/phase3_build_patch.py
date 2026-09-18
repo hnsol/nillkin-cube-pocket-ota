@@ -207,6 +207,22 @@ def patch_configured_firmware(
     return patch_firmware(data, spec), spec
 
 
+def validate_configured_target(
+    base_data: bytes, target_data: bytes, config: keymap_config.KeymapConfig
+) -> images.ValidatedImage:
+    """Accept only a target exactly regenerated from GLOBAL and this config."""
+
+    expected, _ = patch_configured_firmware(base_data, config)
+    if target_data != expected:
+        raise FirmwarePatchError(
+            "configured target does not match GLOBAL regeneration from this config"
+        )
+    try:
+        return images.validate_configured_image(target_data)
+    except images.ImageValidationError as error:
+        raise FirmwarePatchError(str(error)) from error
+
+
 def _same_path(left: Path, right: Path) -> bool:
     return left.expanduser().resolve(strict=False) == right.expanduser().resolve(
         strict=False
@@ -354,6 +370,6 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (FirmwarePatchError, OSError) as error:
+    except (FirmwarePatchError, keymap_config.KeymapConfigError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(1)

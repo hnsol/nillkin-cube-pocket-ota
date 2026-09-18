@@ -16,16 +16,20 @@ if __package__:
         ble_transport,
         firmware_image,
         gatt_ota,
+        keymap_config,
         ota_protocol,
         phase1_ble_info,
+        phase3_build_patch,
         pixart_ota,
     )
 else:
     import ble_transport
     import firmware_image
     import gatt_ota
+    import keymap_config
     import ota_protocol
     import phase1_ble_info
+    import phase3_build_patch
     import pixart_ota
 
 
@@ -54,6 +58,8 @@ class PreflightReport:
 def _is_approved_image(image: firmware_image.ValidatedImage | None) -> bool:
     if image is None:
         return False
+    if image.profile.kind is firmware_image.ImageKind.CONFIGURED:
+        return True
     return any(
         image.profile == profile for profile in firmware_image.APPROVED_IMAGES.values()
     )
@@ -193,6 +199,8 @@ async def execute_on_client(
     advertised_name: str,
     image: firmware_image.ValidatedImage,
     data: bytes,
+    base_data: bytes | None = None,
+    config: keymap_config.KeymapConfig | None = None,
     operation_timeout: float,
 ) -> PreflightReport:
     """Authorize and flash only after a fresh probe on this exact connection."""
@@ -206,9 +214,20 @@ async def execute_on_client(
         raise ExecutePreflightError(
             "write preflight gateを満たしません: " + "; ".join(report.blockers)
         )
-    authorized = gatt_ota.authorize_firmware(
-        data, report.vendor_ota_model, recovery=False
-    )
+    if (base_data is None) != (config is None):
+        raise ExecutePreflightError("configured firmware inputs must be paired")
+    if config is None:
+        authorized = gatt_ota.authorize_firmware(
+            data, report.vendor_ota_model, recovery=False
+        )
+    else:
+        authorized = gatt_ota.authorize_configured_firmware(
+            data,
+            report.vendor_ota_model,
+            base_data=base_data,
+            config=config,
+            recovery=False,
+        )
     await gatt_ota.GattOtaEngine(client, operation_timeout=operation_timeout).flash(
         authorized
     )
@@ -253,12 +272,11 @@ def print_transfer_plan(image: firmware_image.ValidatedImage, data: bytes) -> No
     print("- 0x25 object ACK: notify待ち (device→host)")
     print("- raw payload send: 実機0x27応答で決定 (host→device; without response)")
     print("- 0x17 PRN ACK: notify待ち (device→host)")
-    print("- 0x18 upgrade send: version[10]が未確定 (host→device; with response)")
+    print("- 0x18 upgrade send: version[10]=1.0.1 (host→device; with response)")
     print("- 0x18 upgrade ACK: notify待ち (device→host)")
     print("- 0x22 reset send: 22 00 (host→device; without response)")
-    print("Executable: no")
-    print("- version[10]が未確定")
-    print("- retransmit endpointが未確定")
+    print("Executable: --executeとSHA-256確認時のみ")
+    print("- retransmit: ff02へ0x28")
     print("- MTU / PRN / resumeは実機0x27応答で決定")
 
 
@@ -267,6 +285,16 @@ def build_parser() -> argparse.ArgumentParser:
         description="Nillkin Cube Pocketのread-only OTA preflight"
     )
     parser.add_argument("--firmware", required=True, metavar="PATH")
+    parser.add_argument(
+        "--base-firmware",
+        metavar="PATH",
+        help="configured targetを再生成・照合する公式GLOBAL原本",
+    )
+    parser.add_argument(
+        "--remap-config",
+        metavar="PATH",
+        help="configured targetを再生成・照合するTOML設定",
+    )
     parser.add_argument("--scan-timeout", type=float, default=15.0)
     parser.add_argument("--connect-timeout", type=float, default=10.0)
     parser.add_argument("--operation-timeout", type=float, default=5.0)
@@ -303,7 +331,11 @@ async def _run(
             "pip install -r requirements.txt を実行してください"
         ) from exc
 
-    target = await phase1_ble_info.scan_target(BleakScanner, timeout=args.scan_timeout)
+    target = await _scan_target(
+        BleakScanner,
+        timeout=args.scan_timeout,
+        device_uuid=getattr(args, "device_uuid", None),
+    )
     return await collect_preflight(
         target.device,
         advertised_name=target.advertised_name,
@@ -341,7 +373,12 @@ async def _scan_target(
 
 
 async def _run_execute(
-    args: argparse.Namespace, image: firmware_image.ValidatedImage, data: bytes
+    args: argparse.Namespace,
+    image: firmware_image.ValidatedImage,
+    data: bytes,
+    *,
+    base_data: bytes | None = None,
+    config: keymap_config.KeymapConfig | None = None,
 ) -> PreflightReport:
     try:
         from bleak import BleakClient, BleakScanner
@@ -359,12 +396,20 @@ async def _run_execute(
             advertised_name=target.advertised_name,
             image=image,
             data=data,
+            base_data=base_data,
+            config=config,
             operation_timeout=args.operation_timeout,
         )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if bool(args.base_firmware) != bool(args.remap_config):
+        print(
+            "error: --base-firmwareと--remap-configは常に組で指定してください",
+            file=sys.stderr,
+        )
+        return 2
     if args.execute and not args.confirm_sha256:
         print("error: --executeには--confirm-sha256が必要です", file=sys.stderr)
         return 2
@@ -381,7 +426,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         data = Path(args.firmware).read_bytes()
-        image = firmware_image.validate_image(data)
+        base_data: bytes | None = None
+        config: keymap_config.KeymapConfig | None = None
+        if args.base_firmware:
+            base_data = Path(args.base_firmware).read_bytes()
+            config = keymap_config.load_config(args.remap_config)
+            image = phase3_build_patch.validate_configured_target(
+                base_data, data, config
+            )
+        else:
+            image = firmware_image.validate_image(data)
         if args.execute and args.confirm_sha256 != image.profile.sha256:
             print("error: --confirm-sha256が対象FWと完全一致しません", file=sys.stderr)
             return 2
@@ -395,11 +449,15 @@ def main(argv: list[str] | None = None) -> int:
             print_transfer_plan(image, data)
             return 0
         report = asyncio.run(
-            _run_execute(args, image, data) if args.execute else _run(args, image)
+            _run_execute(args, image, data, base_data=base_data, config=config)
+            if args.execute
+            else _run(args, image)
         )
     except (
         OSError,
         firmware_image.ImageValidationError,
+        keymap_config.KeymapConfigError,
+        phase3_build_patch.FirmwarePatchError,
         phase1_ble_info.Phase1Error,
         ExecutePreflightError,
         gatt_ota.GattOtaError,
@@ -407,10 +465,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print(
-            "中断しました。FWデータは送信していません。",
-            file=sys.stderr,
+        message = (
+            "中断しました。OTAが未完了の可能性があります。"
+            if args.execute
+            else "中断しました。FWデータは送信していません。"
         )
+        print(message, file=sys.stderr)
         return 130
     print_report(report)
     if args.execute:

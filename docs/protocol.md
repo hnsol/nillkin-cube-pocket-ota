@@ -16,22 +16,25 @@
 ## macOS CLI
 
 通常はread-onlyです。`tools.macos_ota`は`--execute`なしではPhase 1情報を取得するだけで、
-FWを送信しません。実行時も、承認済みGLOBAL/JP_LANG imageのSHA-256を
-`--confirm-sha256`へ完全一致で渡す必要があります。
+FWを送信しません。実行時は固定GLOBAL/JP_LANG imageのSHA-256を
+`--confirm-sha256`へ完全一致で渡す必要があります。設定生成imageは、
+`--base-firmware`と`--remap-config`を同時に渡し、GLOBAL原本と同じTOMLからメモリ上で
+再生成したbytesが対象と完全一致する場合だけ送信候補にします。これは固定allowlistを
+緩めるものではありません。
 
 `--execute`ではscan後の**同一BLE接続**でGATT情報、`0x23`、`0x2B`を再取得します。
 advertised name、`PAR2801`、`B077T` model、必須GATT構成、image hashがすべて通過した時だけ
 `GattOtaEngine`へ送信を委譲します。CoreBluetooth UUIDは`--device-uuid`でscan対象を絞る用途だけであり、
 本人性の判定には使いません。
 
-`tools.macos_recover`は承認済みGLOBAL imageだけを許す薄い復旧CLIです。同じ確認と
+`tools.macos_recover`は固定GLOBAL imageだけを許す薄い復旧CLIです。同じ確認と
 `--execute --confirm-sha256 <GLOBALのhash>`を必要とします。BLE広告が失われた完全brick状態は
 このCLIでは復旧できません。
 
 ## 静的転送計画
 
 `python -m tools.macos_ota --firmware <approved.bin> --show-transfer-plan` は、
-承認済みSHA-256のimageを検証し、Bleakをimport・scan・connect・writeせずに既知の
+固定allowlistまたは原本＋TOMLから完全再生成できるimageを検証し、Bleakをimport・scan・connect・writeせずに既知の
 wire operationだけを表示します。これは実行器ではありません。
 
 Windows OTAUtilityの解析で確認したnew flowのoperationは、`0x27` init-new、

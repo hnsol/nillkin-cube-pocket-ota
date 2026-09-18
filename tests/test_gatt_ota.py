@@ -6,7 +6,7 @@ import warnings
 from collections import defaultdict, deque
 from unittest import mock
 
-from tools import firmware_image, gatt_ota
+from tools import firmware_image, gatt_ota, keymap_config
 
 
 def validated_image(
@@ -102,6 +102,39 @@ class AuthorizationTests(unittest.TestCase):
             self.assertRaisesRegex(gatt_ota.GattProtocolError, "GLOBAL"),
         ):
             gatt_ota.authorize_firmware(data, "B077T_TEST", recovery=True)
+
+    def test_configured_authorization_revalidates_base_and_config_and_never_recovers(
+        self,
+    ):
+        data = b"configured-target"
+        base = b"approved-global"
+        config = keymap_config.KeymapConfig({"caps_lock": 0xE0})
+        configured = validated_image(firmware_image.ImageKind.CONFIGURED)
+        with (
+            mock.patch.object(
+                gatt_ota.phase3_build_patch,
+                "validate_configured_target",
+                return_value=configured,
+            ) as validate,
+            self.assertRaisesRegex(gatt_ota.GattProtocolError, "recovery"),
+        ):
+            gatt_ota.authorize_configured_firmware(
+                data, "B077T_TEST", base_data=base, config=config, recovery=True
+            )
+
+        self.assertEqual(validate.call_count, 0)
+        with mock.patch.object(
+            gatt_ota.phase3_build_patch,
+            "validate_configured_target",
+            return_value=configured,
+        ) as validate:
+            authorized = gatt_ota.authorize_configured_firmware(
+                data, "B077T_TEST", base_data=base, config=config, recovery=False
+            )
+
+        validate.assert_called_once_with(base, data, config)
+        self.assertEqual(authorized.profile.kind, firmware_image.ImageKind.CONFIGURED)
+        self.assertEqual(authorized.mode, gatt_ota.AuthorizationMode.FLASH)
 
 
 class FakeGattClient:

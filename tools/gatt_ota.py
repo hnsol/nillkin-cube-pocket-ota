@@ -9,9 +9,11 @@ from enum import Enum
 from typing import Any
 
 if __package__:
-    from . import firmware_image, pixart_ota
+    from . import firmware_image, keymap_config, phase3_build_patch, pixart_ota
 else:
     import firmware_image
+    import keymap_config
+    import phase3_build_patch
     import pixart_ota
 
 
@@ -82,6 +84,34 @@ def authorize_firmware(
         data,
         validated.profile,
         mode,
+        _token=_AUTHORIZATION_TOKEN,
+    )
+
+
+def authorize_configured_firmware(
+    data: bytes,
+    vendor_model: str,
+    *,
+    base_data: bytes,
+    config: keymap_config.KeymapConfig,
+    recovery: bool,
+) -> AuthorizedFirmware:
+    """Authorize only an exact in-memory regeneration from GLOBAL plus config."""
+
+    if recovery:
+        raise GattProtocolError("configured firmware cannot be used for recovery")
+    try:
+        validated = phase3_build_patch.validate_configured_target(
+            base_data, data, config
+        )
+    except phase3_build_patch.FirmwarePatchError as exc:
+        raise GattProtocolError("configured firmware validation failed") from exc
+    if not isinstance(vendor_model, str) or not vendor_model.startswith("B077T"):
+        raise GattProtocolError("vendor model must have the B077T prefix")
+    return AuthorizedFirmware(
+        data,
+        validated.profile,
+        AuthorizationMode.FLASH,
         _token=_AUTHORIZATION_TOKEN,
     )
 

@@ -1,10 +1,10 @@
 """Strict validation for approved Nillkin Cube Pocket firmware images."""
 
+import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-import hashlib
 from types import MappingProxyType
-from typing import Mapping
 
 if __package__:
     from .phase2_analyze_fw import FirmwareAnalysisError, analyze_bytes
@@ -19,6 +19,7 @@ class ImageValidationError(RuntimeError):
 class ImageKind(Enum):
     GLOBAL = "global"
     JP_LANG = "jp_lang"
+    CONFIGURED = "configured"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,31 @@ def validate_image(data: bytes) -> ValidatedImage:
 
     digest = hashlib.sha256(data).hexdigest()
     profile = _profile_for_digest(digest)
+    return _validate_profile(data, profile)
+
+
+def validate_configured_image(data: bytes) -> ValidatedImage:
+    """Validate a GLOBAL-derived target already checked against its remap config.
+
+    This does not add the image to the fixed approved-image allowlist.
+    Callers must first prove byte-for-byte regeneration from the GLOBAL original.
+    """
+
+    global_profile = APPROVED_IMAGES[ImageKind.GLOBAL]
+    profile = FirmwareProfile(
+        kind=ImageKind.CONFIGURED,
+        size=len(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        full_file_sum16=sum(data) & 0xFFFF,
+        embedded_version=global_profile.embedded_version,
+        hardware_model=global_profile.hardware_model,
+        keymap_marker_offset=global_profile.keymap_marker_offset,
+    )
+    return _validate_profile(data, profile)
+
+
+def _validate_profile(data: bytes, profile: FirmwareProfile) -> ValidatedImage:
+    """Apply the structural checks shared by fixed and configured images."""
 
     if len(data) != profile.size:
         raise ImageValidationError(

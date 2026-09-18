@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import io
 import os
 import subprocess
@@ -10,7 +11,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from tests.fakes import GattStep, ScriptedGattClient
-from tools import ble_transport, firmware_image, gatt_ota, ota_protocol, phase1_ble_info
+from tools import (
+    ble_transport,
+    firmware_image,
+    gatt_ota,
+    keymap_config,
+    ota_protocol,
+    phase1_ble_info,
+)
 from tools import macos_ota as ota
 
 FW_INFO_FRAME = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
@@ -147,6 +155,46 @@ class ParserSafetyTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn("confirm-sha256", output.getvalue())
 
+    def test_execute_interrupt_warns_that_ota_may_be_incomplete(self):
+        stderr = io.StringIO()
+        image = approved_image()
+
+        def interrupt(coroutine):
+            coroutine.close()
+            raise KeyboardInterrupt
+
+        with (
+            patch.object(Path, "read_bytes", return_value=b"approved"),
+            patch.object(firmware_image, "validate_image", return_value=image),
+            patch.object(asyncio, "run", side_effect=interrupt),
+            redirect_stderr(stderr),
+        ):
+            status = ota.main(
+                [
+                    "--firmware",
+                    "fw.bin",
+                    "--execute",
+                    "--confirm-sha256",
+                    image.profile.sha256,
+                ]
+            )
+
+        self.assertEqual(status, 130)
+        self.assertIn("OTAが未完了", stderr.getvalue())
+        self.assertNotIn("FWデータは送信していません", stderr.getvalue())
+
+    def test_cli_rejects_unpaired_configured_firmware_inputs_before_file_access(self):
+        for args in (
+            ["--firmware", "target.bin", "--base-firmware", "base.bin"],
+            ["--firmware", "target.bin", "--remap-config", "layout.toml"],
+        ):
+            with self.subTest(args=args):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    status = ota.main(args)
+                self.assertEqual(status, 2)
+                self.assertIn("base-firmware", stderr.getvalue())
+
     def test_cli_accepts_show_transfer_plan(self):
         args = ota.build_parser().parse_args(
             ["--firmware", "fw.bin", "--show-transfer-plan"]
@@ -198,16 +246,38 @@ class ParserSafetyTests(unittest.TestCase):
         )
         self.assertIn("0x17 PRN ACK: notify待ち (device→host)", rendered)
         self.assertIn(
-            "0x18 upgrade send: version[10]が未確定 (host→device; with response)",
+            "0x18 upgrade send: version[10]=1.0.1 (host→device; with response)",
             rendered,
         )
         self.assertIn("0x18 upgrade ACK: notify待ち (device→host)", rendered)
         self.assertIn(
             "0x22 reset send: 22 00 (host→device; without response)", rendered
         )
-        self.assertIn("Executable: no", rendered)
-        self.assertIn("version[10]が未確定", rendered)
-        self.assertIn("retransmit endpointが未確定", rendered)
+        self.assertIn("Executable: --executeとSHA-256確認時のみ", rendered)
+        self.assertIn("retransmit: ff02へ0x28", rendered)
+
+    @unittest.skipUnless(
+        Path("firmware/original/B077T_US_13.bin").is_file()
+        and Path("firmware/patched/B077T_US_13_JP_LANG.bin").is_file(),
+        "approved firmware fixtures unavailable",
+    )
+    def test_show_transfer_plan_accepts_only_the_exact_configured_regeneration(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            status = ota.main(
+                [
+                    "--firmware",
+                    "firmware/patched/B077T_US_13_JP_LANG.bin",
+                    "--base-firmware",
+                    "firmware/original/B077T_US_13.bin",
+                    "--remap-config",
+                    "configs/jp-lang.toml",
+                    "--show-transfer-plan",
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        self.assertIn("Target image: configured", output.getvalue())
 
     def test_show_transfer_plan_module_import_does_not_import_bleak(self):
         script = """
@@ -322,6 +392,61 @@ class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
             )
 
         engine_class.assert_not_called()
+
+    async def test_execute_uses_configured_authorization_only_with_base_and_config(
+        self,
+    ):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model="B077T_US_13",
+            current_ota_version="1.0",
+            current_ota_checksum=0x6162,
+            target_image_kind="configured",
+            target_full_file_sum16=0xEC28,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+        )
+        engine = SimpleNamespace(flash=AsyncMock())
+        config = keymap_config.KeymapConfig({"caps_lock": 0xE0})
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            patch.object(gatt_ota, "authorize_firmware") as fixed_auth,
+            patch.object(
+                gatt_ota, "authorize_configured_firmware", return_value=object()
+            ) as configured_auth,
+            patch.object(gatt_ota, "GattOtaEngine", return_value=engine),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 3",
+                image=firmware_image.ValidatedImage(
+                    profile=firmware_image.FirmwareProfile(
+                        kind=firmware_image.ImageKind.CONFIGURED,
+                        size=1,
+                        sha256="configured",
+                        full_file_sum16=0,
+                        embedded_version=b"B077T_US_13",
+                        hardware_model=b"PAR2801",
+                        keymap_marker_offset=0,
+                    ),
+                    keymap=(),
+                ),
+                data=b"target",
+                base_data=b"base",
+                config=config,
+                operation_timeout=5,
+            )
+
+        fixed_auth.assert_not_called()
+        configured_auth.assert_called_once_with(
+            b"target", "B077T_US_13", base_data=b"base", config=config, recovery=False
+        )
+        engine.flash.assert_awaited_once()
 
     def test_cli_accepts_only_firmware_and_three_timeouts(self):
         args = ota.build_parser().parse_args(
