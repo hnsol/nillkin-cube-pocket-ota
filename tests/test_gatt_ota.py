@@ -231,22 +231,18 @@ class SlowPayloadGattClient(FakeGattClient):
         await super().write_gatt_char(characteristic, data, response=response)
 
 
-class DelayedEarlyAckDuringNextWriteGattClient(FakeGattClient):
-    def __init__(self, *, first_payload: bytes, second_payload: bytes, **kwargs):
+class AckBeforeWriteReturnsGattClient(FakeGattClient):
+    def __init__(self, *, final_payload: bytes, ack: bytes, **kwargs):
         super().__init__(**kwargs)
-        self._first_payload = first_payload
-        self._second_payload = second_payload
-        self._delayed_frame = None
+        self._final_payload = final_payload
+        self._ack = ack
 
     async def write_gatt_char(self, characteristic, data, *, response):
         payload = bytes(data)
-        if not response and payload == self._first_payload:
+        if not response and payload == self._final_payload:
             self.events.append(("write", characteristic, payload, response))
-            self._delayed_frame = self._notifications[payload].popleft()
-            return
-        if not response and payload == self._second_payload:
-            self.events.append(("write", characteristic, payload, response))
-            self._callback(characteristic, self._delayed_frame)
+            self._callback(characteristic, self._ack)
+            await asyncio.sleep(0)
             return
         await super().write_gatt_char(characteristic, data, response=response)
 
@@ -316,6 +312,18 @@ class CoreBluetoothGattClient(FakeGattClient):
     async def write_gatt_char(self, characteristic, data, *, response):
         self.peripheral.events.append(("write", bytes(data), response))
         await super().write_gatt_char(characteristic, data, response=response)
+
+
+class StaleAckBeforePayloadTaskEngine(gatt_ota.GattOtaEngine):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._injected_stale_ack = False
+
+    async def _bounded(self, awaitable, stage, timeout=None):
+        if stage == "write 0x01" and not self._injected_stale_ack:
+            self._injected_stale_ack = True
+            self._notification_callback("ff01", bytearray.fromhex("17 0300"))
+        return await super()._bounded(awaitable, stage, timeout)
 
 
 def small_transfer_client(
@@ -948,19 +956,45 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(upgrade, writes)
         self.assertNotIn(b"\x22\x00", writes)
 
-    async def test_delayed_early_ack_during_next_write_cannot_satisfy_boundary(self):
-        firmware = b"\x01\x02\x00\x00"
-        upgrade = bytes.fromhex("18 04000000 0300 312e302e310000000000")
-        client = DelayedEarlyAckDuringNextWriteGattClient(
-            first_payload=b"\x01\x02",
-            second_payload=b"\x00\x00",
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+    async def test_prn_ack_before_final_wnr_write_returns_is_accepted(self):
+        firmware = b"\x01\x02"
+        upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
+        client = AckBeforeWriteReturnsGattClient(
+            final_payload=firmware,
+            ack=bytes.fromhex("17 0300"),
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
-                b"\x01\x02": [bytes.fromhex("17 0300")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
         )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.01,
+        ).flash(authorize(firmware))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertIn(upgrade, writes)
+        self.assertIn(b"\x22\x00", writes)
+
+    async def test_prn_ack_during_wnr_readiness_is_not_current_payload_ack(self):
+        client = CoreBluetoothGattClient(
+            ready=[],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        def notify_before_ready():
+            client._callback("ff01", bytes.fromhex("17 0300"))
+            return False
+
+        client.peripheral.ready.extend((notify_before_ready, True))
 
         with self.assertRaises(gatt_ota.GattTimeoutError):
             await gatt_ota.GattOtaEngine(
@@ -969,10 +1003,36 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                 chunk_pacing_seconds=0,
                 operation_timeout=0.1,
                 ack_timeout=0.01,
-            ).flash(authorize(firmware))
+            ).flash(authorize(b"\x01\x02"))
 
         writes = [event[2] for event in client.events if event[0] == "write"]
-        self.assertNotIn(upgrade, writes)
+        self.assertNotIn(
+            bytes.fromhex("18 02000000 0300 312e302e310000000000"), writes
+        )
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_queued_stale_prn_ack_before_native_write_is_not_current(self):
+        client = CoreBluetoothGattClient(
+            ready=[True],
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaises(gatt_ota.GattTimeoutError):
+            await StaleAckBeforePayloadTaskEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(
+            bytes.fromhex("18 02000000 0300 312e302e310000000000"), writes
+        )
         self.assertNotIn(b"\x22\x00", writes)
 
     async def test_upgrade_ack_failure_or_malformed_frame_stops_without_reset(self):

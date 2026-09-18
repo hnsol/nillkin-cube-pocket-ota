@@ -228,6 +228,18 @@ class GattOtaEngine:
             f"write 0x{payload[0]:02x}",
         )
 
+    async def _write_payload(self, payload: bytes) -> None:
+        stage = f"write 0x{payload[0]:02x}"
+        await self._wait_for_wnr_ready(stage)
+
+        async def dispatch_payload() -> None:
+            self._payload_dispatch_counter += 1
+            await self._client.write_gatt_char(
+                self._control, payload, response=False
+            )
+
+        await self._bounded(dispatch_payload(), stage)
+
     def _corebluetooth_wnr_ready(self):
         backend_id = getattr(self._client, "backend_id", None)
         if getattr(backend_id, "value", backend_id) != "core_bluetooth":
@@ -434,9 +446,7 @@ class GattOtaEngine:
                 chunk_index += 1
                 chunk_length = len(operation.payload)
                 try:
-                    await self._write(
-                        self._control, operation.payload, response=False
-                    )
+                    await self._write_payload(operation.payload)
                 except GattOtaError as exc:
                     self._raise_with_context(
                         exc,
@@ -448,7 +458,6 @@ class GattOtaEngine:
                             "payload write",
                         ),
                     )
-                self._payload_dispatch_counter += 1
                 await asyncio.sleep(self._chunk_pacing_seconds)
                 self._ensure_connected("payload pacing")
             elif operation.kind == "wait-prn":
