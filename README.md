@@ -25,6 +25,34 @@ python3 -m tools.macos_ota --firmware firmware/original/B077T_US_13.bin
 実機probeは、接続先と応答を確認できる状態でのみ実行してください。
 この統合CLIは物理キーボードに対してまだ再実行していません。過去のPhase 1 raw観測はありますが、live preflightとB077T gateは未検証です。
 
+## キーマップ設定とpatch生成
+
+`configs/jp-lang.toml` は、確認済みGLOBAL原本から以下のJP配列を作る設定例です。
+
+```toml
+format_version = 1
+
+[remap]
+caps_lock = "left_control"
+left_control = "left_alt"
+left_alt = "left_gui"
+left_gui = "lang2"
+right_gui = "lang1"
+right_alt = "right_gui"
+```
+
+左辺は物理キー、右辺は出力するHID Usage名です。指定しない物理キーは変更しません。使用できる物理キーは `caps_lock`、`left_control`、`left_alt`、`left_gui`、`right_gui`、`right_alt` です。右辺には `caps_lock`、`space`、`left_control`、`left_shift`、`left_alt`、`left_gui`、`right_control`、`right_shift`、`right_alt`、`right_gui`、`lang1`、`lang2` を指定できます。
+
+原本を直接指定して、コピーとpatchを新規作成します。出力済みの同名ファイルは上書きしません。
+
+```sh
+python3 -m tools.phase3_build_patch downloaded/B077T_US_13.bin \
+  --config configs/jp-lang.toml \
+  --output-root .
+```
+
+この例の出力先は `firmware/original/B077T_US_13.bin` と `firmware/patched/B077T_US_13_JP_LANG.bin` です。設定ファイル名からの出力名が不都合な場合は、ファイル名だけを `--patched-name MY_LAYOUT.bin` で指定できます。
+
 ## 安全性と制限
 
 - firmware flash、復旧、初期化、再開処理は未実装です。

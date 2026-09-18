@@ -11,8 +11,8 @@ from types import MappingProxyType
 from unittest.mock import patch
 
 from tools import firmware_image as images
+from tools import keymap_config
 from tools import phase3_build_patch as fw
-
 
 FIXTURE = bytearray(b"\x11" * 96)
 FIXTURE[8:19] = b"B077T_US_13"
@@ -59,12 +59,18 @@ class ValidationTests(unittest.TestCase):
         missing = FIXTURE.replace(b"B077T_US_13", b"B077T_US_12")
         duplicate = FIXTURE + b"B077T_US_13"
         missing_spec = fw.FirmwareSpec(
-            len(missing), hashlib.sha256(missing).hexdigest(), b"B077T_US_13",
-            FIXTURE_PATCHES, 0,
+            len(missing),
+            hashlib.sha256(missing).hexdigest(),
+            b"B077T_US_13",
+            FIXTURE_PATCHES,
+            0,
         )
         duplicate_spec = fw.FirmwareSpec(
-            len(duplicate), hashlib.sha256(duplicate).hexdigest(), b"B077T_US_13",
-            FIXTURE_PATCHES, 0,
+            len(duplicate),
+            hashlib.sha256(duplicate).hexdigest(),
+            b"B077T_US_13",
+            FIXTURE_PATCHES,
+            0,
         )
         with self.assertRaisesRegex(fw.FirmwarePatchError, "exactly once"):
             fw.validate_original(missing, missing_spec)
@@ -76,8 +82,11 @@ class ValidationTests(unittest.TestCase):
         changed[40] = 0x38
         changed = bytes(changed)
         spec = fw.FirmwareSpec(
-            len(changed), hashlib.sha256(changed).hexdigest(), b"B077T_US_13",
-            FIXTURE_PATCHES, 0,
+            len(changed),
+            hashlib.sha256(changed).hexdigest(),
+            b"B077T_US_13",
+            FIXTURE_PATCHES,
+            0,
         )
         with self.assertRaisesRegex(fw.FirmwarePatchError, r"0x28.*expected 0x39"):
             fw.validate_original(changed, spec)
@@ -99,9 +108,11 @@ class ValidationTests(unittest.TestCase):
             approved_kind=images.ImageKind.GLOBAL,
         )
 
-        with patch.object(images, "APPROVED_IMAGES", approved_images):
-            with self.assertRaisesRegex(fw.FirmwarePatchError, "sum16"):
-                fw.validate_original(FIXTURE, spec)
+        with (
+            patch.object(images, "APPROVED_IMAGES", approved_images),
+            self.assertRaisesRegex(fw.FirmwarePatchError, "sum16"),
+        ):
+            fw.validate_original(FIXTURE, spec)
 
 
 class PatchingTests(unittest.TestCase):
@@ -115,9 +126,12 @@ class PatchingTests(unittest.TestCase):
         self.assertEqual(
             differences,
             (
-                (40, 0x39, 0xE0), (42, 0xE0, 0xE2),
-                (44, 0xE2, 0xE3), (46, 0xE3, 0x91),
-                (48, 0xE7, 0x90), (50, 0xE6, 0xE7),
+                (40, 0x39, 0xE0),
+                (42, 0xE0, 0xE2),
+                (44, 0xE2, 0xE3),
+                (46, 0xE3, 0x91),
+                (48, 0xE7, 0x90),
+                (50, 0xE6, 0xE7),
             ),
         )
         self.assertEqual(len(patched), len(FIXTURE))
@@ -142,8 +156,55 @@ class PatchingTests(unittest.TestCase):
         with self.assertRaisesRegex(fw.FirmwarePatchError, "unexpected differences"):
             fw.verify_patched(FIXTURE, bytes(patched), FIXTURE_SPEC)
 
+    def test_configured_spec_derives_sum16_from_the_selected_remaps(self):
+        config = keymap_config.KeymapConfig({"caps_lock": 0xE0, "left_control": 0xE2})
+
+        spec = fw.configured_spec(config)
+
+        self.assertEqual(
+            [(patch.offset, patch.old, patch.new) for patch in spec.patches],
+            [(0x1DABE, 0x39, 0xE0), (0x1DB4A, 0xE0, 0xE2)],
+        )
+        expected = (
+            images.APPROVED_IMAGES[images.ImageKind.GLOBAL].full_file_sum16
+            + (0xE0 - 0x39)
+            + (0xE2 - 0xE0)
+        ) & 0xFFFF
+        self.assertEqual(spec.patched_sum16, expected)
+        self.assertTrue(spec.require_keymap_high_zero)
+
+    def test_configured_spec_rejects_nonzero_high_byte_in_keymap_entry(self):
+        spec = fw.FirmwareSpec(
+            size=len(FIXTURE),
+            sha256=FIXTURE_SHA256,
+            version=b"B077T_US_13",
+            patches=(fw.BytePatch(40, 0x39, 0xE0, "Caps"),),
+            patched_sum16=(sum(FIXTURE) + 0xE0 - 0x39) & 0xFFFF,
+            require_keymap_high_zero=True,
+        )
+
+        with self.assertRaisesRegex(fw.FirmwarePatchError, "high byte"):
+            fw.validate_original(FIXTURE, spec)
+
+    def test_configured_spec_omits_noop_mapping_from_binary_differences(self):
+        spec = fw.configured_spec(keymap_config.KeymapConfig({"left_alt": 0xE2}))
+
+        self.assertEqual(spec.patches, ())
+        self.assertEqual(
+            spec.patched_sum16,
+            images.APPROVED_IMAGES[images.ImageKind.GLOBAL].full_file_sum16,
+        )
+
 
 class FileBuildTests(unittest.TestCase):
+    def test_config_name_becomes_a_clear_patched_filename(self):
+        self.assertEqual(
+            fw.default_patched_name(Path("configs/jp-lang.toml")),
+            "B077T_US_13_JP_LANG.bin",
+        )
+        with self.assertRaisesRegex(fw.FirmwarePatchError, "filename"):
+            fw.validate_patched_name("../unsafe.bin")
+
     def test_direct_script_help_preserves_cli_entrypoint(self):
         result = subprocess.run(
             [sys.executable, "tools/phase3_build_patch.py", "--help"],
@@ -167,7 +228,9 @@ class FileBuildTests(unittest.TestCase):
 
             self.assertEqual(source.read_bytes(), FIXTURE)
             self.assertEqual(original.read_bytes(), FIXTURE)
-            self.assertEqual(patched.read_bytes(), fw.patch_firmware(FIXTURE, FIXTURE_SPEC))
+            self.assertEqual(
+                patched.read_bytes(), fw.patch_firmware(FIXTURE, FIXTURE_SPEC)
+            )
             self.assertEqual(result.size, 96)
             self.assertEqual(result.original_sha256, FIXTURE_SHA256)
             self.assertEqual(result.patched_sum16, 0x0CEA)
@@ -190,9 +253,13 @@ class FileBuildTests(unittest.TestCase):
             source = Path(directory) / "same.bin"
             source.write_bytes(FIXTURE)
             with self.assertRaisesRegex(fw.FirmwarePatchError, "same path"):
-                fw.build_files(source, source, Path(directory) / "patched.bin", spec=FIXTURE_SPEC)
+                fw.build_files(
+                    source, source, Path(directory) / "patched.bin", spec=FIXTURE_SPEC
+                )
             with self.assertRaisesRegex(fw.FirmwarePatchError, "same path"):
-                fw.build_files(source, Path(directory) / "original.bin", source, spec=FIXTURE_SPEC)
+                fw.build_files(
+                    source, Path(directory) / "original.bin", source, spec=FIXTURE_SPEC
+                )
 
     def test_cli_prints_checksums_and_six_differences(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -207,7 +274,9 @@ class FileBuildTests(unittest.TestCase):
             self.assertIn("original SHA-256: " + FIXTURE_SHA256, output)
             self.assertIn("patched sum16: 0x0cea", output)
             self.assertEqual(output.count("->"), 6)
-            self.assertTrue((root / "firmware" / "original" / "B077T_US_13.bin").is_file())
+            self.assertTrue(
+                (root / "firmware" / "original" / "B077T_US_13.bin").is_file()
+            )
             self.assertTrue(
                 (root / "firmware" / "patched" / "B077T_US_13_JP_LANG.bin").is_file()
             )

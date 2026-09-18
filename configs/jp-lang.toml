@@ -1,0 +1,9 @@
+format_version = 1
+
+[remap]
+caps_lock = "left_control"
+left_control = "left_alt"
+left_alt = "left_gui"
+left_gui = "lang2"
+right_gui = "lang1"
+right_alt = "right_gui"

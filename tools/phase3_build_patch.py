@@ -1,21 +1,22 @@
-#!/usr/bin/env python3
 """Build a strictly validated Nillkin keymap firmware patch.
 
 This tool only reads and writes firmware files. It contains no BLE/OTA code.
 """
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import os
-from pathlib import Path
 import sys
 import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 
 if __package__:
     from . import firmware_image as images
+    from . import keymap_config
 else:
     import firmware_image as images
+    import keymap_config
 
 
 class FirmwarePatchError(RuntimeError):
@@ -38,6 +39,7 @@ class FirmwareSpec:
     patches: tuple[BytePatch, ...]
     patched_sum16: int
     approved_kind: images.ImageKind | None = None
+    require_keymap_high_zero: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,7 +71,46 @@ GLOBAL_SPEC = FirmwareSpec(
     ),
     patched_sum16=_JP_LANG_PROFILE.full_file_sum16,
     approved_kind=images.ImageKind.GLOBAL,
+    require_keymap_high_zero=True,
 )
+
+
+_PHYSICAL_KEY_PATCHES = {
+    "caps_lock": BytePatch(0x1DABE, 0x39, 0xE0, "Caps"),
+    "left_control": BytePatch(0x1DB4A, 0xE0, 0xE2, "Left Ctrl"),
+    "left_alt": BytePatch(0x1DB3E, 0xE2, 0xE3, "Left Alt"),
+    "left_gui": BytePatch(0x1DB56, 0xE3, 0x91, "Left Cmd"),
+    "right_gui": BytePatch(0x1DB58, 0xE7, 0x90, "Right Cmd"),
+    "right_alt": BytePatch(0x1DB4C, 0xE6, 0xE7, "Right Alt"),
+}
+
+
+def configured_spec(config: keymap_config.KeymapConfig) -> FirmwareSpec:
+    """Build an exact GLOBAL-derived patch specification from a checked TOML config."""
+
+    patches = tuple(
+        BytePatch(
+            offset=source.offset,
+            old=source.old,
+            new=usage,
+            label=source.label,
+        )
+        for name, usage in config.remap.items()
+        if usage != (source := _PHYSICAL_KEY_PATCHES[name]).old
+    )
+    patched_sum16 = (
+        _GLOBAL_PROFILE.full_file_sum16
+        + sum(patch.new - patch.old for patch in patches)
+    ) & 0xFFFF
+    return FirmwareSpec(
+        size=_GLOBAL_PROFILE.size,
+        sha256=_GLOBAL_PROFILE.sha256,
+        version=_GLOBAL_PROFILE.embedded_version,
+        patches=patches,
+        patched_sum16=patched_sum16,
+        approved_kind=images.ImageKind.GLOBAL,
+        require_keymap_high_zero=True,
+    )
 
 
 def _sha256(data: bytes) -> str:
@@ -109,6 +150,13 @@ def validate_original(data: bytes, spec: FirmwareSpec = GLOBAL_SPEC) -> None:
                 f"offset 0x{change.offset:x}: expected 0x{change.old:02x}, "
                 f"got 0x{actual:02x}"
             )
+        if spec.require_keymap_high_zero:
+            high_byte = data[change.offset + 1]
+            if high_byte != 0:
+                raise FirmwarePatchError(
+                    f"offset 0x{change.offset + 1:x}: expected keymap high byte "
+                    f"0x00, got 0x{high_byte:02x}"
+                )
 
 
 def _differences(before: bytes, after: bytes) -> tuple[tuple[int, int, int], ...]:
@@ -125,9 +173,7 @@ def verify_patched(
     if len(patched) != len(original) or len(patched) != spec.size:
         raise FirmwarePatchError("patched size differs from the validated original")
     actual = _differences(original, patched)
-    expected = tuple(
-        sorted((item.offset, item.old, item.new) for item in spec.patches)
-    )
+    expected = tuple(sorted((item.offset, item.old, item.new) for item in spec.patches))
     if actual != expected:
         raise FirmwarePatchError(
             f"patched image has unexpected differences: expected {expected!r}, "
@@ -152,10 +198,35 @@ def patch_firmware(data: bytes, spec: FirmwareSpec = GLOBAL_SPEC) -> bytes:
     return result
 
 
+def patch_configured_firmware(
+    data: bytes, config: keymap_config.KeymapConfig
+) -> tuple[bytes, FirmwareSpec]:
+    """Patch verified GLOBAL bytes using an already parsed configuration."""
+
+    spec = configured_spec(config)
+    return patch_firmware(data, spec), spec
+
+
 def _same_path(left: Path, right: Path) -> bool:
     return left.expanduser().resolve(strict=False) == right.expanduser().resolve(
         strict=False
     )
+
+
+def validate_patched_name(name: str) -> str:
+    """Accept a filename only, so config/CLI input cannot choose another directory."""
+
+    path = Path(name)
+    if path.name != name or path.suffix.lower() != ".bin" or name == ".bin":
+        raise FirmwarePatchError("patched output must be a .bin filename")
+    return name
+
+
+def default_patched_name(config_path: Path) -> str:
+    """Derive a stable, visible output name from a remap config filename."""
+
+    stem = config_path.stem.upper().replace("-", "_")
+    return validate_patched_name(f"B077T_US_13_{stem}.bin")
 
 
 def _stage_file(destination: Path, data: bytes) -> Path:
@@ -197,7 +268,9 @@ def build_files(
     if _same_path(source, original_output) or _same_path(source, patched_output):
         raise FirmwarePatchError("input and output must not be the same path")
     if _same_path(original_output, patched_output):
-        raise FirmwarePatchError("original and patched outputs must not be the same path")
+        raise FirmwarePatchError(
+            "original and patched outputs must not be the same path"
+        )
     for destination in (original_output, patched_output):
         if os.path.lexists(destination):
             raise FirmwarePatchError(f"output already exists: {destination}")
@@ -237,14 +310,32 @@ def build_files(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Validate GLOBAL firmware and build the six-key JP LANG patch"
+        description="Validate GLOBAL firmware and build a checked keymap patch"
     )
     parser.add_argument("firmware", type=Path, help="downloaded GLOBAL firmware")
     parser.add_argument("--output-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--config", type=Path, help="TOML remap configuration (format_version = 1)"
+    )
+    parser.add_argument(
+        "--patched-name",
+        help="patched filename only; default derives from --config or uses JP_LANG",
+    )
     args = parser.parse_args(argv)
+    if args.patched_name is not None:
+        patched_name = validate_patched_name(args.patched_name)
+    elif args.config is not None:
+        patched_name = default_patched_name(args.config)
+    else:
+        patched_name = "B077T_US_13_JP_LANG.bin"
+    spec = (
+        configured_spec(keymap_config.load_config(args.config))
+        if args.config is not None
+        else GLOBAL_SPEC
+    )
     original_path = args.output_root / "firmware" / "original" / "B077T_US_13.bin"
-    patched_path = args.output_root / "firmware" / "patched" / "B077T_US_13_JP_LANG.bin"
-    result = build_files(args.firmware, original_path, patched_path, spec=GLOBAL_SPEC)
+    patched_path = args.output_root / "firmware" / "patched" / patched_name
+    result = build_files(args.firmware, original_path, patched_path, spec=spec)
 
     print(f"size: {result.size} bytes")
     print(f"original: {result.original_path}")
@@ -254,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"patched SHA-256: {result.patched_sha256}")
     print(f"patched sum16: 0x{result.patched_sum16:04x}")
     print("differences:")
-    labels = {change.offset: change.label for change in GLOBAL_SPEC.patches}
+    labels = {change.offset: change.label for change in spec.patches}
     for offset, old, new in result.differences:
         print(f"  0x{offset:x}: 0x{old:02x} -> 0x{new:02x} ({labels[offset]})")
     return 0
