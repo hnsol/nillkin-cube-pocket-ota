@@ -661,6 +661,8 @@ class GattOtaEngine:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            if not getattr(self._client, "is_connected", False):
+                return
             if not primary_failed:
                 raise GattOtaError(f"stop notify failed: {exc}") from exc
 

@@ -312,6 +312,23 @@ class DisconnectOnResetGattClient(FakeGattClient):
             self.is_connected = False
 
 
+class DisconnectDuringStopAfterResetGattClient(FakeGattClient):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._reset_written = False
+
+    async def write_gatt_char(self, characteristic, data, *, response):
+        await super().write_gatt_char(characteristic, data, response=response)
+        if bytes(data) == b"\x22\x00":
+            self._reset_written = True
+
+    async def stop_notify(self, characteristic):
+        self.events.append(("stop-notify", characteristic))
+        if self._reset_written:
+            self.is_connected = False
+            raise RuntimeError("disconnected")
+
+
 class RaiseOnResetGattClient(FakeGattClient):
     async def write_gatt_char(self, characteristic, data, *, response):
         if bytes(data) == b"\x22\x00":
@@ -907,6 +924,26 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(client.is_connected)
         self.assertNotIn(("stop-notify", "ff01"), client.events)
+
+    async def test_successful_reset_ignores_disconnect_during_stop_notify(self):
+        firmware = b"\x01\x02"
+        object_create = bytes.fromhex("25 00000000 04000000")
+        upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
+        client = DisconnectDuringStopAfterResetGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
+            notify_after_write={
+                object_create: [bytes.fromhex("25 000000")],
+                firmware: [bytes.fromhex("17 0300")],
+                upgrade: [bytes.fromhex("18 0000")],
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+        ).flash(authorize(firmware))
+
+        self.assertFalse(client.is_connected)
+        self.assertIn(("stop-notify", "ff01"), client.events)
 
     async def test_reset_write_exception_is_not_treated_as_success(self):
         firmware = b"\x01\x02"
