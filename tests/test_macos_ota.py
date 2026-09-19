@@ -148,6 +148,55 @@ class PreflightEvaluationTests(unittest.TestCase):
         self.assertIn("将来のwrite preflight gateを満たす", rendered)
         self.assertNotIn("転送可能", rendered)
 
+    def test_read_only_report_explains_known_global_signature(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model=None,
+            current_ota_version="1.0.1",
+            current_ota_checksum=0xEC27,
+            target_image_kind="jp_lang",
+            target_full_file_sum16=0xEC29,
+            checksums_comparable=False,
+            ready_for_future_flash=False,
+            blockers=("Vendor OTA model B077Tを確認できません",),
+        )
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            ota.print_report(report)
+
+        rendered = output.getvalue()
+        self.assertIn("read-only確認完了", rendered)
+        self.assertIn("FW書込みは未実施", rendered)
+        self.assertIn("--accept-installed-global-signature", rendered)
+        self.assertNotIn("将来のwrite preflight gateを満たしません", rendered)
+
+    def test_read_only_report_explains_known_remap_signature(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 3",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model=None,
+            current_ota_version="1.0.1",
+            current_ota_checksum=0xEC29,
+            target_image_kind="global",
+            target_full_file_sum16=0xEC27,
+            checksums_comparable=False,
+            ready_for_future_flash=False,
+            blockers=("Vendor OTA model B077Tを確認できません",),
+        )
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            ota.print_report(report)
+
+        rendered = output.getvalue()
+        self.assertIn("read-only確認完了", rendered)
+        self.assertIn("--accept-installed-remap-signature", rendered)
+        self.assertNotIn("将来のwrite preflight gateを満たしません", rendered)
+
     def test_exact_factory_signature_allows_only_approved_global(self):
         report = ota.evaluate_preflight(
             expected_identity(),

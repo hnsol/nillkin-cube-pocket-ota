@@ -474,6 +474,33 @@ def print_report(report: PreflightReport) -> None:
     print("Checksums comparable: no")
     if report.ready_for_future_flash:
         print("Result: 将来のwrite preflight gateを満たす")
+    elif report.blockers == ("Vendor OTA model B077Tを確認できません",):
+        global_sum = firmware_image.APPROVED_IMAGES[
+            firmware_image.ImageKind.GLOBAL
+        ].full_file_sum16
+        jp_sum = firmware_image.APPROVED_IMAGES[
+            firmware_image.ImageKind.JP_LANG
+        ].full_file_sum16
+        if report.current_ota_version == "1.0.1" and (
+            report.current_ota_checksum == global_sum
+        ):
+            print("Result: read-only確認完了。FW書込みは未実施です。")
+            print(
+                "既知のGLOBALを検出しました。JP_LANG/設定生成FWへ進むには "
+                "--accept-installed-global-signature を明示してください。"
+            )
+        elif report.current_ota_version == "1.0.1" and (
+            report.current_ota_checksum == jp_sum
+        ):
+            print("Result: read-only確認完了。FW書込みは未実施です。")
+            print(
+                "既知のremap checksumを検出しました。再書込みには "
+                "--accept-installed-remap-signature を明示してください。"
+            )
+        else:
+            print("Result: 将来のwrite preflight gateを満たしません")
+            for blocker in report.blockers:
+                print(f"- {blocker}")
     else:
         print("Result: 将来のwrite preflight gateを満たしません")
         for blocker in report.blockers:
