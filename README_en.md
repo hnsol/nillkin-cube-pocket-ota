@@ -50,6 +50,12 @@ cd nillkin-cube-pocket-ota
 python3.14 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 ```
 
+From then on, activate the virtual environment from the repository directory in every new terminal before running any command:
+
+```sh
+. .venv/bin/activate
+```
+
 Build a patched firmware from the vendor GLOBAL image (`B077T_US_13.bin`, not included) and print the BLE transfer plan without connecting to anything:
 
 ```sh

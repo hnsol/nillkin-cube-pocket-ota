@@ -50,6 +50,12 @@ cd nillkin-cube-pocket-ota
 python3.14 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
 ```
 
+2回目以降は、新しいターミナルを開くたびにリポジトリのディレクトリで仮想環境を有効化してから、各コマンドを実行してください。
+
+```sh
+. .venv/bin/activate
+```
+
 ベンダーGLOBALイメージ（`B077T_US_13.bin`、同梱されていません）からpatch済みファームウェアをビルドし、何にも接続せずにBLE転送計画を表示します。
 
 ```sh
