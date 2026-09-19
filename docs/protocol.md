@@ -58,8 +58,9 @@ notifyです。raw payloadと`0x22` resetだけはhostからwithout-responseで�
 BleakのCoreBluetooth without-response writeはnative送信queueへの投入後すぐreturnし、
 queueの空きを保証しません。そのため各raw payloadとresetのwrite直前に
 `canSendWriteWithoutResponse`を約1ms間隔、operation timeout内でpollし、trueの時だけ送信します。
-APIの例外、不正値、待機中の切断、timeoutはfail-closedです。OTAUtilityに合わせ、raw payloadは
-各物理write後に2ms待機します。plannerは`0x17` ACKをPRN threshold数の
+APIの例外、不正値、待機中の切断、timeoutはfail-closedです。macOS/CoreBluetoothでは、
+native送信queueへの投入完了と実際のdeliveryを区別するため、raw payloadの各物理write後に
+10ms待機します。非CoreBluetooth backendの既定値は従来どおり2msです。plannerは`0x17` ACKをPRN threshold数の
 論理ブロック送信後、またはobject末尾（firmware末尾を含む）に配置します。3 bytes ACKの
 checksumはbytes 1..2、4 bytes ACKではbytes 2..3のlittle-endianです。
 FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だけを検査します。
@@ -80,7 +81,7 @@ PRN 16、object 4096 bytesでは論理上のACK境界は3904 bytes（244×16）�
 GATT engineは各論理ブロックをCoreBluetoothのWNR上限（host MTU - 3）以下の物理断片へ
 分割します。実測はSteam DeckでMTU 23／最大20 bytes、macOSでMTU 50／最大47 bytesです。
 raw payloadはWNRのみで送信し、各物理断片ごとにreadiness確認、dispatch counter更新、
-2ms pacingを行います。物理断片サイズが論理ブロック長より小さい場合、OSの送信queueとdeviceの
+macOS/CoreBluetoothでは10ms pacing（その他backendは既定で2ms）を行います。物理断片サイズが論理ブロック長より小さい場合、OSの送信queueとdeviceの
 ACK timingがhostの中間PRN dispatch境界に一致しない可能性があるため、中間PRNでは待機せず、
 object末尾でrunning sum16に一致する`0x17`を待ちます。有効な形式でもchecksumが一致しない早期ACKは
 記録して読み飛ばし、timeout時の診断に最後の不一致を含めます。別opcodeまたは不正形式は即時停止し、
@@ -90,7 +91,7 @@ object-create後の`0x25`待機とupgrade後の`0x18`待機では、直前object
 共通deadline内で読み飛ばします。複数届いてもdeadlineは延長せず、別opcodeはraw frame付きで即時停止します。
 host上限を取得できない場合や不正な場合はobject-create前に停止します。
 診断用に`0x27`のoffset/checksum/max object size/論理ブロック長/PRN threshold、host WNR上限、
-物理断片サイズをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
+物理断片サイズ・実際の物理断片pacingをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
 object/論理payload位置・長さとWNR readinessのfalse観測回数・累積待機時間を含めます。
 244-byte単位のWRは実機でACKを得られなかったため、WR経路と実験オプションはありません。
 `--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。

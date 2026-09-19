@@ -23,6 +23,8 @@ OTA_VERSION = "1.0.1"
 _NOTIFICATION_OPCODES = frozenset({0x17, 0x18, 0x25})
 _STALE_PRN_OPCODES = frozenset({0x17})
 _AUTHORIZATION_TOKEN = object()
+_DEFAULT_CHUNK_PACING_SECONDS = 0.002
+_COREBLUETOOTH_CHUNK_PACING_SECONDS = 0.010
 
 
 class GattOtaError(RuntimeError):
@@ -134,7 +136,7 @@ class GattOtaEngine:
         control_characteristic: Any = CONTROL_CHARACTERISTIC,
         retransmit_characteristic: Any = RETRANSMIT_CHARACTERISTIC,
         settle_seconds: float = 0.03,
-        chunk_pacing_seconds: float = 0.002,
+        chunk_pacing_seconds: float = _DEFAULT_CHUNK_PACING_SECONDS,
         operation_timeout: float = 5.0,
         ack_timeout: float = 10.0,
     ) -> None:
@@ -240,7 +242,7 @@ class GattOtaEngine:
             stage = f"write payload fragment {fragment_index} size {len(fragment)}"
             await self._wait_for_wnr_ready(stage)
 
-            async def dispatch_payload() -> None:
+            async def dispatch_payload(fragment: bytes = fragment) -> None:
                 self._payload_dispatch_counter += 1
                 await self._client.write_gatt_char(
                     self._control,
@@ -249,8 +251,18 @@ class GattOtaEngine:
                 )
 
             await self._bounded(dispatch_payload(), stage)
-            await asyncio.sleep(self._chunk_pacing_seconds)
+            await asyncio.sleep(self._payload_pacing_seconds())
             self._ensure_connected("payload pacing")
+
+    def _payload_pacing_seconds(self) -> float:
+        """Use conservative physical-fragment pacing on CoreBluetooth."""
+        backend_id = getattr(self._client, "backend_id", None)
+        if (
+            getattr(backend_id, "value", backend_id) == "core_bluetooth"
+            and self._chunk_pacing_seconds == _DEFAULT_CHUNK_PACING_SECONDS
+        ):
+            return _COREBLUETOOTH_CHUNK_PACING_SECONDS
+        return self._chunk_pacing_seconds
 
     def _corebluetooth_wnr_ready(self):
         backend_id = getattr(self._client, "backend_id", None)
@@ -495,6 +507,7 @@ class GattOtaEngine:
             f"payload mode={self.payload_mode}; "
             f"host WNR limit={self.host_wnr_limit}; "
             f"physical fragment size={self.physical_fragment_size}; "
+            f"physical fragment pacing={self._payload_pacing_seconds():.3f}s; "
             f"WNR readiness false observations={self.wnr_ready_false_count}; "
             f"WNR readiness wait={self.wnr_ready_wait_seconds:.6f}s"
         )

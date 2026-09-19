@@ -4,6 +4,7 @@ import struct
 import unittest
 import warnings
 from collections import defaultdict, deque
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -345,6 +346,39 @@ class CoreBluetoothGattClient(FakeGattClient):
     async def write_gatt_char(self, characteristic, data, *, response):
         self.peripheral.events.append(("write", bytes(data), response))
         await super().write_gatt_char(characteristic, data, response=response)
+
+
+class ResumeFinalObjectGattClient(CoreBluetoothGattClient):
+    """A device that acknowledges only the resumed final GLOBAL object."""
+
+    def __init__(
+        self,
+        *,
+        expected_payload_size: int,
+        final_checksum: int,
+        upgrade: bytes,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._expected_payload_size = expected_payload_size
+        self._final_checksum = final_checksum
+        self._upgrade = upgrade
+        self._payload_size = 0
+
+    async def write_gatt_char(self, characteristic, data, *, response):
+        payload = bytes(data)
+        await super().write_gatt_char(characteristic, payload, response=response)
+        if response and payload.startswith(b"\x25"):
+            self._callback(characteristic, bytes.fromhex("25 000000"))
+        elif response and payload == self._upgrade:
+            self._callback(characteristic, bytes.fromhex("18 0000"))
+        elif not response and payload != b"\x22\x00":
+            self._payload_size += len(payload)
+            if self._payload_size == self._expected_payload_size:
+                self._callback(
+                    characteristic,
+                    b"\x17\x00" + self._final_checksum.to_bytes(2, "little"),
+                )
 
 
 class StaleAckBeforePayloadTaskEngine(gatt_ota.GattOtaEngine):
@@ -788,12 +822,12 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
             r"prn_threshold=1.*host WNR limit=244.*"
             r"physical fragment size=2.*"
+            r"physical fragment pacing=0.010s.*"
             r"WNR readiness false observations=1",
         ):
             await gatt_ota.GattOtaEngine(
                 client,
                 settle_seconds=0,
-                chunk_pacing_seconds=0,
                 operation_timeout=0.1,
                 ack_timeout=0.01,
             ).flash(authorize(b"\x01\x02"))
@@ -1562,6 +1596,55 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resume_actual_global_final_object_uses_26_mac_fragments(self):
+        firmware = (
+            Path(__file__).resolve().parents[1]
+            / "firmware/original/B077T_US_13.bin"
+        ).read_bytes()
+        self.assertEqual(len(firmware), 123_916)
+        self.assertEqual(gatt_ota.pixart_ota.sum16(firmware), 0xEC27)
+        self.assertEqual(gatt_ota.pixart_ota.sum16(firmware[: 30 * 4096]), 0x24EC)
+        remaining = firmware[30 * 4096 :]
+        self.assertEqual(len(remaining), 1036)
+        upgrade = gatt_ota.pixart_ota.build_upgrade(
+            len(firmware), 0xEC27, gatt_ota.OTA_VERSION
+        )
+        client = ResumeFinalObjectGattClient(
+            expected_payload_size=len(remaining),
+            final_checksum=0xEC27,
+            upgrade=upgrade,
+            reads=[
+                init_response(
+                    offset=30,
+                    checksum=0x24EC,
+                    max_object_size=4096,
+                    mtu_size=244,
+                    prn_threshold=16,
+                )
+            ],
+            mtu_size=50,
+            ready=[],
+        )
+
+        engine = gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.5, ack_timeout=0.5
+        )
+        await engine.recover(authorize(firmware, recovery=True))
+
+        payload_writes = [
+            event[2]
+            for event in client.events
+            if event[0] == "write"
+            and event[3] is False
+            and event[2] != b"\x22\x00"
+        ]
+        self.assertEqual(b"".join(payload_writes), remaining)
+        self.assertEqual(len(payload_writes), 26)
+        self.assertTrue(all(len(fragment) <= 47 for fragment in payload_writes))
+        self.assertEqual(engine._payload_pacing_seconds(), 0.01)
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertEqual(writes[-2:], [upgrade, b"\x22\x00"])
+
     async def test_inspect_state_only_writes_init_new_and_reads_state(self):
         client = FakeGattClient(
             reads=[
