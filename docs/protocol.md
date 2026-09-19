@@ -82,7 +82,9 @@ PRN 16、object 4096 bytesでは論理上のACK境界は3904 bytes（244×16）�
 4096 bytes後です。running sum16もこの2境界に一致させます。
 
 GATT engineは各論理ブロックをCoreBluetoothのWNR上限（host MTU - 3）以下の物理断片へ
-分割します。実測はSteam DeckでMTU 23／最大20 bytes、macOSでMTU 50／最大47 bytesです。
+分割します。deviceが各ATT writeをflash callbackへ渡すため、物理断片サイズはWNR上限と
+論理ブロック長の小さい方以下で最大の4-byte倍数にします。実測はSteam DeckでMTU 23／
+20 bytes、macOSでMTU 50／44 bytesです。算出サイズが4 bytes未満なら送信せず停止します。
 raw payloadはWNRのみで送信し、各物理断片ごとにreadiness確認、dispatch counter更新、
 macOS/CoreBluetoothでは10ms pacing（その他backendは既定で2ms）を行います。物理断片サイズが論理ブロック長より小さい場合、OSの送信queueとdeviceの
 ACK timingがhostの中間PRN dispatch境界に一致しない可能性があるため、中間PRNでは待機せず、

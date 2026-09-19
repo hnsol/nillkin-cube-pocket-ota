@@ -487,7 +487,13 @@ class GattOtaEngine:
                 + self._state_diagnostics(state)
             )
         self.host_wnr_limit = host_mtu - 3
-        self.physical_fragment_size = min(state.mtu_size, self.host_wnr_limit)
+        transport_limit = min(state.mtu_size, self.host_wnr_limit)
+        self.physical_fragment_size = transport_limit - (transport_limit % 4)
+        if self.physical_fragment_size < 4:
+            raise GattProtocolError(
+                "aligned physical fragment size is below 4 bytes; "
+                + self._state_diagnostics(state)
+            )
         return self.physical_fragment_size
 
     def _validate_payload_transport(self, state: pixart_ota.OtaState) -> int:

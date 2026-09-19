@@ -70,7 +70,9 @@ python3 -m tools.macos_ota \
 `0x27`応答の`mtu_size=244`はOTA上の論理ブロック長です。BLEのATT write上限とは
 別で、raw payloadはvendor実装どおりwrite-without-response（WNR）のみを使います。
 実測したhost MTUはSteam Deckで23、macOSで50であり、ATT header 3 bytesを除く
-物理断片はそれぞれ最大20/47 bytesです。244-byte論理ブロックをこの上限以下へ分割し、
+WNR上限はそれぞれ20/47 bytesです。deviceのflash書込み境界に合わせ、物理断片は
+各WNR上限と論理ブロック長の小さい方以下で最大の4-byte倍数（20/44 bytes）にします。
+上限が4 bytes未満なら送信せず停止します。244-byte論理ブロックをこのサイズへ分割し、
 各断片でCoreBluetoothの送信可能状態と2ms pacingを確認します。PRN threshold 16は
 物理write 16回ではなく論理ブロック16個を表します。ただし物理分割時は、OSの送信queueと
 deviceのACK timingがhostの3904 bytes dispatch境界に一致しない可能性があるため、中間PRNでは

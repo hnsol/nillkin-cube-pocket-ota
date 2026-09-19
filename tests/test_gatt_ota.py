@@ -46,7 +46,7 @@ def init_response(
     offset: int = 0,
     checksum: int = 0,
     max_object_size: int = 4,
-    mtu_size: int = 2,
+    mtu_size: int = 4,
     prn_threshold: int = 2,
 ) -> bytes:
     return b"\x0e\x10\x27\x00\x01" + struct.pack(
@@ -368,7 +368,7 @@ def small_transfer_client(
     firmware = b"\x01\x02"
     upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
     return FakeGattClient(
-        reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+        reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
         notify_after_write={
             bytes.fromhex("25 00000000 04000000"): [object_ack],
             firmware: [checksum_ack],
@@ -378,10 +378,29 @@ def small_transfer_client(
 
 
 class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
+    def test_physical_fragment_size_is_largest_aligned_transport_limit(self):
+        state = gatt_ota.pixart_ota.OtaState(0, 1, 0, 0, 4096, 244, 16, 1)
+
+        for host_mtu, expected in ((50, 44), (23, 20), (247, 244)):
+            with self.subTest(host_mtu=host_mtu):
+                engine = gatt_ota.GattOtaEngine(
+                    FakeGattClient(reads=[], mtu_size=host_mtu)
+                )
+                self.assertEqual(engine._validate_payload_transport(state), expected)
+
+    def test_physical_fragment_limit_below_four_fails_closed(self):
+        state = gatt_ota.pixart_ota.OtaState(0, 1, 0, 0, 4096, 244, 16, 1)
+        engine = gatt_ota.GattOtaEngine(FakeGattClient(reads=[], mtu_size=6))
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError, "aligned physical fragment"
+        ):
+            engine._validate_payload_transport(state)
+
     async def test_corebluetooth_payload_waits_for_native_wnr_queue(self):
         client = CoreBluetoothGattClient(
             ready=[False, False, True],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 b"\x01\x02": [bytes.fromhex("17 0300")],
@@ -412,7 +431,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_corebluetooth_wnr_queue_timeout_stops_before_payload(self):
         client = CoreBluetoothGattClient(
             ready=[False] * 100,
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -438,7 +457,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_corebluetooth_wnr_readiness_exception_fails_closed(self):
         client = CoreBluetoothGattClient(
             ready=[RuntimeError("native readiness failed")],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -454,7 +473,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_corebluetooth_disconnect_during_wnr_readiness_fails_closed(self):
         client = CoreBluetoothGattClient(
             ready=[],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -474,7 +493,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_corebluetooth_reset_also_waits_for_native_wnr_queue(self):
         client = CoreBluetoothGattClient(
             ready=[True, False, True],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 b"\x01\x02": [bytes.fromhex("17 0300")],
@@ -523,7 +542,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_corebluetooth_readiness_deadline_precedes_late_true(self):
         client = CoreBluetoothGattClient(
             ready=[False, True],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -557,10 +576,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         firmware = b"\x01\x02\x03\x04"
         upgrade = bytes.fromhex("18 04000000 0a00 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=2)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
-                b"\x03\x04": [bytes.fromhex("17 0a00")],
+                firmware: [bytes.fromhex("17 0a00")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
         )
@@ -580,15 +599,15 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             and event[3] is False
             and event[2] != b"\x22\x00"
         ]
-        self.assertEqual(payload_writes, [b"\x01\x02", b"\x03\x04"])
+        self.assertEqual(payload_writes, [firmware])
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
     async def test_host_limit_fragments_logical_blocks_without_changing_prn_window(self):
-        firmware = bytes(index % 251 for index in range(4096))
-        first_ack_fragment = firmware[3895:3904]
-        final_fragment = firmware[4092:4096]
+        firmware = bytes(index % 251 for index in range(3964))
+        first_ack_fragment = firmware[3880:3904]
+        final_fragment = firmware[3948:3964]
         threshold_checksum = 21464
-        final_checksum = 46408
+        final_checksum = 31574
         upgrade = gatt_ota.pixart_ota.build_upgrade(
             len(firmware), final_checksum, gatt_ota.OTA_VERSION
         )
@@ -618,7 +637,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine.last_state.mtu_size, 244)
         self.assertEqual(engine.host_wnr_limit, 47)
-        self.assertEqual(engine.physical_fragment_size, 47)
+        self.assertEqual(engine.physical_fragment_size, 44)
         payload_writes = [
             event[2]
             for event in client.events
@@ -627,10 +646,14 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             and event[2] != b"\x22\x00"
         ]
         self.assertEqual(b"".join(payload_writes), firmware)
-        self.assertTrue(all(len(fragment) <= 47 for fragment in payload_writes))
+        self.assertTrue(all(len(fragment) <= 44 for fragment in payload_writes))
+        self.assertTrue(all(len(fragment) % 4 == 0 for fragment in payload_writes))
         self.assertEqual(
             [len(fragment) for fragment in payload_writes[:6]],
-            [47, 47, 47, 47, 47, 9],
+            [44, 44, 44, 44, 44, 24],
+        )
+        self.assertEqual(
+            [len(fragment) for fragment in payload_writes[-2:]], [44, 16]
         )
         first_ack_write_index = payload_writes.index(first_ack_fragment)
         self.assertEqual(
@@ -726,12 +749,12 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"\x22\x00", writes)
 
     async def test_unfragmented_transfer_still_waits_at_intermediate_prn_boundary(self):
-        firmware = b"\x01\x02\x03\x04\x05\x06"
+        firmware = bytes(range(1, 13))
         client = FakeGattClient(
-            reads=[init_response(max_object_size=6, mtu_size=2, prn_threshold=2)],
-            mtu_size=5,
+            reads=[init_response(max_object_size=12, mtu_size=4, prn_threshold=2)],
+            mtu_size=7,
             notify_after_write={
-                bytes.fromhex("25 00000000 06000000"): [bytes.fromhex("25 000000")]
+                bytes.fromhex("25 00000000 0c000000"): [bytes.fromhex("25 000000")]
             },
         )
 
@@ -745,8 +768,8 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             ).flash(authorize(firmware))
 
         writes = [event[2] for event in client.events if event[0] == "write"]
-        self.assertIn(b"\x03\x04", writes)
-        self.assertNotIn(b"\x05\x06", writes)
+        self.assertIn(bytes(range(5, 9)), writes)
+        self.assertNotIn(bytes(range(9, 13)), writes)
 
     async def test_invalid_or_missing_host_mtu_fails_closed_before_object(self):
         for host_mtu in (None, True, 3, "247"):
@@ -776,7 +799,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_payload_ack_timeout_reports_chunk_and_never_finalizes(self):
         client = CoreBluetoothGattClient(
             ready=[False, True],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -785,9 +808,9 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             gatt_ota.GattTimeoutError,
             r"object 0 logical payload 0 length 2 expected ACK 0x17.*"
-            r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
+            r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=4, "
             r"prn_threshold=1.*host WNR limit=244.*"
-            r"physical fragment size=2.*"
+            r"physical fragment size=4.*"
             r"physical fragment pacing=0.010s.*"
             r"WNR readiness false observations=1",
         ):
@@ -804,7 +827,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_payload_write_timeout_reports_state_and_never_finalizes(self):
         client = SlowPayloadGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -813,9 +836,9 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(
             gatt_ota.GattTimeoutError,
             r"object 0 logical payload 0 length 2 payload write.*"
-            r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
+            r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=4, "
             r"prn_threshold=1.*host WNR limit=244.*"
-            r"physical fragment size=2",
+            r"physical fragment size=4",
         ):
             await gatt_ota.GattOtaEngine(
                 client,
@@ -834,7 +857,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = FailingStopGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 object_create: [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
@@ -849,7 +872,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cleanup_failure_does_not_replace_primary_failure(self):
         client = FailingStopGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("18 0000")]
             },
@@ -865,7 +888,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = DisconnectOnResetGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 object_create: [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
@@ -889,7 +912,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = RaiseOnResetGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 object_create: [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
@@ -905,7 +928,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_object_ack_is_drained_before_object_create(self):
         object_create = bytes.fromhex("25 00000000 04000000")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_burst_after_write={
                 bytes.fromhex("27 02000000 00"): [bytes.fromhex("25 000000")]
             },
@@ -927,7 +950,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_burst_after_write={
                 object_create: [bytes.fromhex("25 000000"), bytes.fromhex("17 0300")]
             },
@@ -951,7 +974,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={object_create: [bytes.fromhex("25 000000")]},
             notify_burst_after_write={
                 b"\x01\x02": [
@@ -982,10 +1005,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         second_object_create = bytes.fromhex("25 04000000 04000000")
         upgrade = bytes.fromhex("18 06000000 1500 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=2)],
             notify_after_write={
                 first_object_create: [bytes.fromhex("25 000000")],
-                b"\x03\x04": [bytes.fromhex("17 0a00")],
+                firmware[:4]: [bytes.fromhex("17 0a00")],
                 b"\x05\x06": [bytes.fromhex("17 1500")],
                 upgrade: [bytes.fromhex("18 0000")],
             },
@@ -1012,7 +1035,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         firmware = b"\x01\x02"
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [
                     bytes.fromhex("25 000000")
@@ -1044,7 +1067,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             upgrade=upgrade,
             upgrade_ack=bytes.fromhex("18 0000"),
             delay=0.02,
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [
                     bytes.fromhex("25 000000")
@@ -1067,7 +1090,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         firmware = b"\x01\x02"
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [
                     bytes.fromhex("25 000000")
@@ -1099,10 +1122,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         second_object_create = bytes.fromhex("25 04000000 04000000")
         upgrade = bytes.fromhex("18 06000000 1500 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=2)],
             notify_after_write={
                 first_object_create: [bytes.fromhex("25 000000")],
-                b"\x03\x04": [bytes.fromhex("17 0a00")],
+                firmware[:4]: [bytes.fromhex("17 0a00")],
             },
             notify_burst_after_write={
                 second_object_create: [
@@ -1169,7 +1192,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         firmware = b"\x01\x02"
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = StopBlockingGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 firmware: [bytes.fromhex("17 0300")],
@@ -1278,7 +1301,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         firmware = b"\x01\x02\x00\x00"
         upgrade = bytes.fromhex("18 04000000 0300 312e302e31")
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=2)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 b"\x01\x02": [bytes.fromhex("17 0300")],
@@ -1300,13 +1323,13 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_prn_ack_during_final_physical_fragment_is_accepted(self):
         firmware = b"\x01\x02\x03\x04"
-        final_fragment = b"\x03\x04"
+        final_fragment = firmware
         upgrade = bytes.fromhex("18 04000000 0a00 312e302e31")
         client = AckBeforeWriteReturnsGattClient(
             final_payload=final_fragment,
             ack=bytes.fromhex("17 0a00"),
             reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
-            mtu_size=5,
+            mtu_size=7,
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 upgrade: [bytes.fromhex("18 0000")],
@@ -1328,7 +1351,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_prn_ack_during_wnr_readiness_is_not_current_payload_ack(self):
         client = CoreBluetoothGattClient(
             ready=[],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -1358,7 +1381,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_queued_stale_prn_ack_before_native_write_is_not_current(self):
         client = CoreBluetoothGattClient(
             ready=[True],
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
             },
@@ -1461,7 +1484,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_ack_times_out_and_stops_notifications(self):
         client = FakeGattClient(
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)]
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)]
         )
 
         with self.assertRaises(gatt_ota.GattTimeoutError):
@@ -1560,7 +1583,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             reads=[init_response()],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
-                b"\x03\x04": [bytes.fromhex("17 0a 00")],
+                firmware[:4]: [bytes.fromhex("17 0a 00")],
                 bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
                 bytes.fromhex("18 06000000 1500 312e302e31"): [
@@ -1586,8 +1609,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                 ("write", "ff01", bytes.fromhex("27 06000000 00")),
                 ("read", "ff01"),
                 ("write", "ff01", bytes.fromhex("25 00000000 04000000")),
-                ("write", "ff01", b"\x01\x02"),
-                ("write", "ff01", b"\x03\x04"),
+                ("write", "ff01", firmware[:4]),
                 ("write", "ff01", bytes.fromhex("25 04000000 04000000")),
                 ("write", "ff01", b"\x05\x06"),
                 (
@@ -1602,7 +1624,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         writes = [event for event in client.events if event[0] == "write"]
         self.assertEqual(
             [event[3] for event in writes],
-            [True, True, True, False, False, True, False, True, False],
+            [True, True, True, False, True, False, True, False],
         )
         options = client.events[0][2]
         discriminator = options["cb"]["notification_discriminator"]
@@ -1665,7 +1687,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             reads=[init_response(offset=0, checksum=0)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
-                b"\x03\x04": [bytes.fromhex("17 0a 00")],
+                firmware[:4]: [bytes.fromhex("17 0a 00")],
                 bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
                 upgrade: [bytes.fromhex("18 00 00")],
@@ -1684,8 +1706,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
                 ("ff02", b"\x28\x00", True),
                 ("ff01", bytes.fromhex("27 06000000 00"), True),
                 ("ff01", bytes.fromhex("25 00000000 04000000"), True),
-                ("ff01", b"\x01\x02", False),
-                ("ff01", b"\x03\x04", False),
+                ("ff01", firmware[:4], False),
                 ("ff01", bytes.fromhex("25 04000000 04000000"), True),
                 ("ff01", b"\x05\x06", False),
                 ("ff01", upgrade, True),
@@ -1700,7 +1721,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             reads=[init_response(offset=0, checksum=0)],
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [b"\x25"],
-                b"\x03\x04": [bytes.fromhex("17 0a 00")],
+                firmware[:4]: [bytes.fromhex("17 0a 00")],
                 bytes.fromhex("25 04000000 04000000"): [b"\x25"],
                 b"\x05\x06": [bytes.fromhex("17 15 00")],
                 upgrade: [bytes.fromhex("18 00 00")],
