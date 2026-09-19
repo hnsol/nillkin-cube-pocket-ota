@@ -9,7 +9,7 @@
 
 ---
 
-Nillkin Cube Pocket OTAは、Nillkin Cube Pocket折りたたみ式Bluetoothキーボード（モデルNKF01、PixArt `PAR2801`）のファームウェア内にあるキーマップにパッチを当て、macOSからBLE経由で書き込む実験的なPython CLIです。6行のTOMLファイルでリマップ内容を記述すると、ツールはベンダーファームウェアイメージ内の該当バイトだけを書き換え、結果を検証したうえでCoreBluetoothを使ってOTAアップデートを実行します。インストールしたMac上でのみ機能するKarabiner-Elementsのようなホスト側のリマップツールとは異なり、このリマップはキーボード側に保持されるため、ペアリングしているすべてのiPhone、iPad、AndroidデバイスやPCへそのままついていきます。また、Windows専用のベンダー製`OTAUtility.exe`とは異なり、macOS上で動作し、キーマップの変更が可能です。
+Nillkin Cube Pocket OTAは、[Nillkin Cube Pocket折りたたみ式Bluetoothキーボード](https://www.nillkin.com/ja-jp/pages/nillkin-%E3%82%AD%E3%83%A5%E3%83%BC%E3%83%96%E3%83%9D%E3%82%B1%E3%83%83%E3%83%88-%E6%8A%98%E3%82%8A%E3%81%9F%E3%81%9F%E3%81%BF%E5%BC%8F-%E3%82%BF%E3%83%83%E3%83%81%E3%83%91%E3%83%83%E3%83%89%E4%BB%98%E3%81%8D%E3%83%96%E3%83%AB%E3%83%BC%E3%83%88%E3%82%A5%E3%83%BC%E3%82%B9%E3%82%AD%E3%83%BC%E3%83%9C%E3%83%BC%E3%83%89)（モデルNKF01、PixArt `PAR2801`）のファームウェア内にあるキーマップにパッチを当て、macOSからBLE経由で書き込む実験的なPython CLIです。6行のTOMLファイルでリマップ内容を記述すると、ツールはベンダーファームウェアイメージ内の該当バイトだけを書き換え、結果を検証したうえでCoreBluetoothを使ってOTAアップデートを実行します。インストールしたMac上でのみ機能するKarabiner-Elementsのようなホスト側のリマップツールとは異なり、このリマップはキーボード側に保持されるため、ペアリングしているすべてのiPhone、iPad、AndroidデバイスやPCへそのままついていきます。また、Windows専用のベンダー製`OTAUtility.exe`とは異なり、macOS上で動作し、キーマップの変更が可能です。
 
 > **ファームウェアの書き込みにはキーボードを文鎮化（brick）させるリスクがあります。** このツールは**1台**の実機（NKF01、GATT model `PAR2801`、revision `1.0.0`）でのみ検証されています。更新が失敗してキーボードがBLEアドバタイズを停止した場合、このツールでは復旧できません。ベンダーファームウェアは同梱されて**いません**。ご自身で入手する必要があります。
 

@@ -83,6 +83,7 @@ The vendor utility is a Windows program that flashes unmodified vendor firmware 
 
 - Source: https://github.com/hnsol/nillkin-cube-pocket-ota
 - License: MIT
+- Product page (Nillkin official): https://www.nillkin.com/pages/nillkin-cube-pocket-foldable-bluetooth-keyboard-with-touchpad
 - Vendor firmware source (third party, Funkeys): https://funkeys.co.kr/bbs/board.php?bo_table=download&wr_id=425
 - Documentation: README.md (Japanese, primary), README_en.md (English), docs/protocol.md, docs/maintenance.md
 
