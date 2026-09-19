@@ -83,6 +83,8 @@ object末尾でrunning sum16に一致する`0x17`を待ちます。有効な形�
 記録して読み飛ばし、timeout時の診断に最後の不一致を含めます。別opcodeまたは不正形式は即時停止し、
 一致ACKが得られなければupgrade/resetしません。物理分割しない場合は従来どおり各PRN境界で待機します。
 payload dispatch順も通知に記録し、boundaryより前のwriteに対応する一致ACKは採用しません。
+object-create後の`0x25`待機とupgrade後の`0x18`待機では、直前objectから遅延した`0x17`だけを
+共通deadline内で読み飛ばします。複数届いてもdeadlineは延長せず、別opcodeはraw frame付きで即時停止します。
 host上限を取得できない場合や不正な場合はobject-create前に停止します。
 診断用に`0x27`のoffset/checksum/max object size/論理ブロック長/PRN threshold、host WNR上限、
 物理断片サイズをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも

@@ -956,6 +956,126 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(upgrade, writes)
         self.assertNotIn(b"\x22\x00", writes)
 
+    async def test_stale_prn_acks_during_next_object_create_are_ignored(self):
+        firmware = b"\x01\x02\x03\x04\x05\x06"
+        first_object_create = bytes.fromhex("25 00000000 04000000")
+        second_object_create = bytes.fromhex("25 04000000 04000000")
+        upgrade = bytes.fromhex("18 06000000 1500 312e302e310000000000")
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            notify_after_write={
+                first_object_create: [bytes.fromhex("25 000000")],
+                b"\x03\x04": [bytes.fromhex("17 0a00")],
+                b"\x05\x06": [bytes.fromhex("17 1500")],
+                upgrade: [bytes.fromhex("18 0000")],
+            },
+            notify_burst_after_write={
+                second_object_create: [
+                    bytes.fromhex("17 0a00"),
+                    bytes.fromhex("17 0a00"),
+                    bytes.fromhex("25 000000"),
+                ]
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        ).flash(authorize(firmware))
+
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_stale_prn_acks_after_upgrade_write_are_ignored(self):
+        firmware = b"\x01\x02"
+        upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [
+                    bytes.fromhex("25 000000")
+                ],
+                firmware: [bytes.fromhex("17 0300")],
+            },
+            notify_burst_after_write={
+                upgrade: [
+                    bytes.fromhex("17 0300"),
+                    bytes.fromhex("17 0300"),
+                    bytes.fromhex("18 0000"),
+                ]
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        ).flash(authorize(firmware))
+
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_only_stale_prn_acks_while_waiting_for_upgrade_times_out(self):
+        firmware = b"\x01\x02"
+        upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [
+                    bytes.fromhex("25 000000")
+                ],
+                firmware: [bytes.fromhex("17 0300")],
+            },
+            notify_burst_after_write={
+                upgrade: [bytes.fromhex("17 0300"), bytes.fromhex("17 0300")]
+            },
+        )
+
+        with self.assertRaisesRegex(gatt_ota.GattTimeoutError, "ACK 0x18"):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(firmware))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_only_stale_prn_acks_while_waiting_for_object_times_out(self):
+        firmware = b"\x01\x02\x03\x04\x05\x06"
+        first_object_create = bytes.fromhex("25 00000000 04000000")
+        second_object_create = bytes.fromhex("25 04000000 04000000")
+        upgrade = bytes.fromhex("18 06000000 1500 312e302e310000000000")
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
+            notify_after_write={
+                first_object_create: [bytes.fromhex("25 000000")],
+                b"\x03\x04": [bytes.fromhex("17 0a00")],
+            },
+            notify_burst_after_write={
+                second_object_create: [
+                    bytes.fromhex("17 0a00"),
+                    bytes.fromhex("17 0a00"),
+                ]
+            },
+        )
+
+        with self.assertRaisesRegex(gatt_ota.GattTimeoutError, "ACK 0x25"):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(firmware))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(b"\x05\x06", writes)
+        self.assertNotIn(upgrade, writes)
+        self.assertNotIn(b"\x22\x00", writes)
+
     async def test_engine_rejects_second_use_before_ble(self):
         client = small_transfer_client()
         engine = gatt_ota.GattOtaEngine(
@@ -1034,13 +1154,31 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
     async def test_unexpected_object_ack_stops_without_reset(self):
         client = small_transfer_client(object_ack=bytes.fromhex("18 0000"))
 
-        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "unexpected ACK"):
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"unexpected ACK during ACK 0x25; raw=18 00 00",
+        ):
             await gatt_ota.GattOtaEngine(
                 client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
             ).flash(authorize(b"\x01\x02"))
 
         self.assertNotIn(b"\x22\x00", [e[2] for e in client.events if e[0] == "write"])
         self.assertEqual(client.events[-1], ("stop-notify", "ff01"))
+
+    async def test_malformed_stale_prn_during_object_ack_is_not_ignored(self):
+        client = small_transfer_client(object_ack=bytes.fromhex("17"))
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"unexpected ACK during ACK 0x25; raw=17",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
+        self.assertNotIn(b"\x22\x00", writes)
 
     async def test_object_ack_payload_is_opaque_after_opcode(self):
         client = small_transfer_client(object_ack=bytes.fromhex("25 deadbe"))
@@ -1209,6 +1347,19 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                     b"\x22\x00",
                     [e[2] for e in client.events if e[0] == "write"],
                 )
+
+    async def test_unexpected_object_ack_while_waiting_for_upgrade_reports_raw(self):
+        client = small_transfer_client(upgrade_ack=bytes.fromhex("25 deadbe"))
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"unexpected ACK during ACK 0x18; raw=25 de ad be",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+            ).flash(authorize(b"\x01\x02"))
+
+        self.assertNotIn(b"\x22\x00", [e[2] for e in client.events if e[0] == "write"])
 
     async def test_missing_ack_times_out_and_stops_notifications(self):
         client = FakeGattClient(

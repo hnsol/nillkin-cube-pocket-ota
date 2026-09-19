@@ -21,6 +21,7 @@ CONTROL_CHARACTERISTIC = "ff01"
 RETRANSMIT_CHARACTERISTIC = "ff02"
 OTA_VERSION = "1.0.1"
 _NOTIFICATION_OPCODES = frozenset({0x17, 0x18, 0x25})
+_STALE_PRN_OPCODES = frozenset({0x17})
 _AUTHORIZATION_TOKEN = object()
 
 
@@ -349,6 +350,7 @@ class GattOtaEngine:
         *,
         stage: str | None = None,
         minimum_payload_dispatch_counter: int | None = None,
+        ignored_opcodes: frozenset[int] = frozenset(),
     ) -> bytes:
         wait_stage = stage or f"ACK 0x{expected_opcode:02x}"
         deadline = asyncio.get_running_loop().time() + self._ack_timeout
@@ -361,9 +363,17 @@ class GattOtaEngine:
                 wait_stage,
                 remaining,
             )
+            if (
+                frame
+                and frame[0] in ignored_opcodes
+                and frame[0] == 0x17
+                and len(frame) in (3, 4)
+            ):
+                continue
             if not frame or frame[0] != expected_opcode:
                 raise GattProtocolError(
-                    f"unexpected ACK during {wait_stage}"
+                    f"unexpected ACK during {wait_stage}; "
+                    f"raw={frame.hex(' ') or '<empty>'}"
                 )
             if (
                 minimum_payload_dispatch_counter is not None
@@ -418,7 +428,10 @@ class GattOtaEngine:
                     f"received=0x{received:04X}, raw={frame.hex(' ')}"
                 ) from exc
             if not frame or frame[0] != 0x17:
-                raise GattProtocolError(f"unexpected ACK during {stage}")
+                raise GattProtocolError(
+                    f"unexpected ACK during {stage}; "
+                    f"raw={frame.hex(' ') or '<empty>'}"
+                )
             checksum = self._checksum_from_ack(frame, stage)
             if checksum != expected_checksum:
                 last_mismatch = (checksum, frame)
@@ -503,7 +516,9 @@ class GattOtaEngine:
                 chunk_index = -1
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-object":
-                await self._wait_notification(0x25)
+                await self._wait_notification(
+                    0x25, ignored_opcodes=_STALE_PRN_OPCODES
+                )
             elif operation.kind == "payload":
                 if prn_window_start:
                     self._drain_notifications()
@@ -565,7 +580,9 @@ class GattOtaEngine:
                 self._drain_notifications()
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-upgrade":
-                frame = await self._wait_notification(0x18)
+                frame = await self._wait_notification(
+                    0x18, ignored_opcodes=_STALE_PRN_OPCODES
+                )
                 if len(frame) == 4 and frame[1] != 0:
                     raise GattProtocolError("upgrade ACK reports failure")
                 if len(frame) not in (3, 4):
