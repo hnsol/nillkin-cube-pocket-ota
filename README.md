@@ -161,3 +161,7 @@ python3 -m tools.macos_recover \
 - 実機へ書込む前に、まずGLOBALへの書込みと復旧を検証してください。必要なら`--device-uuid`はscan対象の絞込みにだけ使えます。
 
 このツールは安全策を持ちますが、firmware更新のリスクをなくすものではありません。
+
+## ライセンス
+
+[MIT License](LICENSE)
