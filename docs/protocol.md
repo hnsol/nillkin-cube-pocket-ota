@@ -43,8 +43,10 @@ CLIはこの連続手順を自動実行しません。CoreBluetooth UUIDは`--de
 `tools.macos_recover`は固定GLOBAL imageだけを許す薄い復旧CLIです。同じ確認と
 `--execute --confirm-sha256 <GLOBALのhash>`を必要とします。BLE広告が失われた完全brick状態は
 このCLIでは復旧できません。復旧実行時もvendor new-flowを厳密に使い、`ff02`への`0x28`、
-`ff01`への`0x27`、offset/checksumのゼロ確認、GLOBAL FWの先頭からの全量転送、の順です。
-`0x28`後の状態が非ゼロなら停止し、保持状態からresumeしません。状態照会だけの場合は
+`ff01`への`0x27`、転送条件の検証、GLOBAL FWのcheckpointからの転送、の順です。
+`0x28`は状態消去ではなく、deviceを永続化済みcheckpointへ巻き戻します。`0x27`で得た
+offsetまでのGLOBAL prefix checksumが一致する場合だけ、そのobjectからresumeします。
+offset 0も同じ規則で処理し、不一致ならpayload、`0x18`、`0x22`を送信せず停止します。状態照会だけの場合は
 `0x27`のwrite/readのみで、`0x28`以降の変更操作を行いません。
 
 ## 静的転送計画

@@ -4,6 +4,7 @@ import struct
 import unittest
 import warnings
 from collections import defaultdict, deque
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -1680,7 +1681,7 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(client.events, [])
 
-    async def test_recovery_retransmits_before_init_and_transfers_full_firmware(self):
+    async def test_recovery_retransmits_before_init_and_transfers_from_zero_checkpoint(self):
         firmware = bytes(range(1, 7))
         upgrade = bytes.fromhex("18 06000000 1500 312e302e31")
         client = FakeGattClient(
@@ -1714,6 +1715,64 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_recovery_resumes_matching_vendor_checkpoint_at_object_30(self):
+        firmware = Path("firmware/original/B077T_US_13.bin").read_bytes()
+        self.assertEqual(len(firmware), 123_916)
+        checkpoint_end = 30 * 4096
+        self.assertEqual(sum(firmware[:checkpoint_end]) & 0xFFFF, 0x24EC)
+        remaining = firmware[checkpoint_end:]
+        self.assertEqual(len(remaining), 1036)
+        object_create = bytes.fromhex("25 00e00100 00100000")
+        upgrade = bytes.fromhex("18 0ce40100 27ec 312e302e31")
+        client = FakeGattClient(
+            reads=[
+                init_response(
+                    offset=30,
+                    checksum=0x24EC,
+                    max_object_size=4096,
+                    mtu_size=244,
+                    prn_threshold=16,
+                )
+            ],
+            mtu_size=50,
+            notify_after_write={
+                object_create: [b"\x25"],
+                remaining[-16:]: [bytes.fromhex("17 27ec")],
+                upgrade: [bytes.fromhex("18 00 00")],
+            },
+        )
+
+        state = await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.1,
+        ).recover(authorize(firmware, recovery=True))
+
+        self.assertEqual((state.offset, state.checksum), (30, 0x24EC))
+        writes = [event for event in client.events if event[0] == "write"]
+        self.assertEqual(
+            [(event[1], event[2], event[3]) for event in writes[:3]],
+            [
+                ("ff02", b"\x28\x00", True),
+                ("ff01", bytes.fromhex("27 0ce40100 00"), True),
+                ("ff01", object_create, True),
+            ],
+        )
+        payload_writes = [
+            event[2]
+            for event in writes[3:]
+            if event[3] is False and event[2] != b"\x22\x00"
+        ]
+        self.assertEqual(b"".join(payload_writes), remaining)
+        self.assertTrue(all(len(fragment) <= 44 for fragment in payload_writes))
+        self.assertTrue(all(len(fragment) % 4 == 0 for fragment in payload_writes))
+        self.assertEqual(
+            [(event[1], event[2], event[3]) for event in writes[-2:]],
+            [("ff01", upgrade, True), ("ff01", b"\x22\x00", False)],
+        )
+
     async def test_recovery_uses_single_post_retransmit_state_query(self):
         firmware = bytes(range(1, 7))
         upgrade = bytes.fromhex("18 06000000 1500 312e302e31")
@@ -1743,10 +1802,10 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_recovery_stops_when_post_retransmit_state_is_not_zero(self):
+    async def test_recovery_stops_when_checkpoint_does_not_match_firmware(self):
         firmware = bytes(range(1, 7))
         client = FakeGattClient(
-            reads=[init_response(offset=1, checksum=10)]
+            reads=[init_response(offset=1, checksum=11)]
         )
         engine = gatt_ota.GattOtaEngine(
             client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
@@ -1754,8 +1813,8 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(
             gatt_ota.GattProtocolError,
-            r"retransmit did not clear resume state; "
-            r"offset=1, checksum=0x000A",
+            r"retransmit checkpoint does not match firmware; "
+            r"offset=1, checksum=0x000B",
         ):
             await engine.recover(authorize(firmware, recovery=True))
 
@@ -1767,6 +1826,8 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
                 bytes.fromhex("27 06000000 00"),
             ],
         )
+        self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
+        self.assertNotIn(b"\x22\x00", writes)
 
 
 if __name__ == "__main__":

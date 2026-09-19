@@ -721,9 +721,9 @@ class GattOtaEngine:
             state = await self._read_state(len(data))
             self.last_state = state
             self._validate_payload_transport(state)
-            if state.offset != 0 or state.checksum != 0:
+            if not self.resume_matches(data, state):
                 raise GattProtocolError(
-                    "retransmit did not clear resume state; "
+                    "retransmit checkpoint does not match firmware; "
                     + self._state_diagnostics(state)
                 )
             await self._run_transfer(data, state)
