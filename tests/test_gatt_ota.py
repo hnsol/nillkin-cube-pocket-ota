@@ -287,9 +287,8 @@ class RaiseOnResetGattClient(FakeGattClient):
 
 
 class CoreBluetoothPeripheral:
-    def __init__(self, ready: list[object], *, wr_limit: object = 512) -> None:
+    def __init__(self, ready: list[object]) -> None:
         self.ready = deque(ready)
-        self.wr_limit = wr_limit
         self.events: list[tuple] = []
 
     def canSendWriteWithoutResponse(self):
@@ -301,19 +300,12 @@ class CoreBluetoothPeripheral:
             return value()
         return value
 
-    def maximumWriteValueLengthForType_(self, write_type):
-        self.events.append(("maximum-write-value-length", write_type))
-        if isinstance(self.wr_limit, BaseException):
-            raise self.wr_limit
-        return self.wr_limit
-
-
 class CoreBluetoothGattClient(FakeGattClient):
     backend_id = "core_bluetooth"
 
-    def __init__(self, *, ready: list[object], wr_limit: object = 512, **kwargs) -> None:
+    def __init__(self, *, ready: list[object], **kwargs) -> None:
         super().__init__(**kwargs)
-        self.peripheral = CoreBluetoothPeripheral(ready, wr_limit=wr_limit)
+        self.peripheral = CoreBluetoothPeripheral(ready)
         self._backend = SimpleNamespace(_peripheral=self.peripheral)
 
     async def write_gatt_char(self, characteristic, data, *, response):
@@ -327,7 +319,7 @@ class StaleAckBeforePayloadTaskEngine(gatt_ota.GattOtaEngine):
         self._injected_stale_ack = False
 
     async def _bounded(self, awaitable, stage, timeout=None):
-        if stage == "write 0x01" and not self._injected_stale_ack:
+        if stage.startswith("write payload fragment") and not self._injected_stale_ack:
             self._injected_stale_ack = True
             self._notification_callback("ff01", bytearray.fromhex("17 0300"))
         return await super()._bounded(awaitable, stage, timeout)
@@ -352,115 +344,6 @@ def small_transfer_client(
 
 
 class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
-    async def test_explicit_corebluetooth_long_write_uses_device_mtu_with_response(self):
-        firmware = b"\x01\x02\x03\x04"
-        upgrade = bytes.fromhex("18 04000000 0a00 312e302e310000000000")
-        client = CoreBluetoothGattClient(
-            ready=[],
-            wr_limit=512,
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=2)],
-            notify_after_write={
-                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
-                b"\x03\x04": [bytes.fromhex("17 0a00")],
-                upgrade: [bytes.fromhex("18 0000")],
-            },
-        )
-        engine = gatt_ota.GattOtaEngine(
-            client,
-            corebluetooth_long_write=True,
-            settle_seconds=0,
-            chunk_pacing_seconds=0,
-            operation_timeout=0.1,
-            ack_timeout=0.1,
-        )
-
-        await engine.flash(authorize(firmware))
-
-        payload_writes = [
-            event
-            for event in client.events
-            if event[0] == "write" and event[2] in (b"\x01\x02", b"\x03\x04")
-        ]
-        self.assertEqual(
-            payload_writes,
-            [
-                ("write", "ff01", b"\x01\x02", True),
-                ("write", "ff01", b"\x03\x04", True),
-            ],
-        )
-        self.assertIn(("maximum-write-value-length", 0), client.peripheral.events)
-        self.assertEqual(engine.payload_mode, "write-with-response")
-        self.assertEqual(engine.host_wr_limit, 512)
-        self.assertEqual(engine.effective_payload_chunk_size, 2)
-        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
-
-    async def test_explicit_long_write_fails_before_object_when_wr_limit_is_too_small(self):
-        client = CoreBluetoothGattClient(
-            ready=[],
-            wr_limit=243,
-            reads=[init_response(max_object_size=4096, mtu_size=244, prn_threshold=16)],
-        )
-
-        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "WR limit"):
-            await gatt_ota.GattOtaEngine(
-                client,
-                corebluetooth_long_write=True,
-                settle_seconds=0,
-                operation_timeout=0.1,
-            ).flash(authorize(b"\x01\x02"))
-
-        writes = [event[2] for event in client.events if event[0] == "write"]
-        self.assertFalse(any(payload.startswith(b"\x25") for payload in writes))
-        self.assertNotIn(b"\x18", writes)
-        self.assertNotIn(b"\x22\x00", writes)
-
-    async def test_explicit_long_write_requires_corebluetooth_native_wr_api(self):
-        clients = (
-            FakeGattClient(reads=[init_response()]),
-            CoreBluetoothGattClient(ready=[], reads=[init_response()]),
-        )
-        clients[1]._backend._peripheral.maximumWriteValueLengthForType_ = None
-        for client in clients:
-            with self.subTest(client=type(client).__name__):
-                with self.assertRaisesRegex(gatt_ota.GattOtaError, "CoreBluetooth WR"):
-                    await gatt_ota.GattOtaEngine(
-                        client,
-                        corebluetooth_long_write=True,
-                        settle_seconds=0,
-                        operation_timeout=0.1,
-                    ).flash(authorize(b"\x01\x02"))
-
-                writes = [event[2] for event in client.events if event[0] == "write"]
-                self.assertFalse(any(payload.startswith(b"\x25") for payload in writes))
-
-    async def test_long_write_ack_timeout_diagnostics_include_mode_and_wr_limit(self):
-        client = CoreBluetoothGattClient(
-            ready=[],
-            wr_limit=512,
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
-            notify_after_write={
-                bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")]
-            },
-        )
-
-        with self.assertRaisesRegex(
-            gatt_ota.GattTimeoutError,
-            r"payload mode=write-with-response.*host WR limit=512.*"
-            r"effective payload chunk size=2",
-        ):
-            await gatt_ota.GattOtaEngine(
-                client,
-                corebluetooth_long_write=True,
-                settle_seconds=0,
-                chunk_pacing_seconds=0,
-                operation_timeout=0.1,
-                ack_timeout=0.01,
-            ).flash(authorize(b"\x01\x02"))
-
-        writes = [event[2] for event in client.events if event[0] == "write"]
-        self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
-        self.assertNotIn(b"\x22\x00", writes)
-
     async def test_corebluetooth_payload_waits_for_native_wnr_queue(self):
         client = CoreBluetoothGattClient(
             ready=[False, False, True],
@@ -666,21 +549,21 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload_writes, [b"\x01\x02", b"\x03\x04"])
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
-    async def test_host_limit_uses_prn_window_then_final_short_payload_ack(self):
-        fragments = [bytes([index]) * 47 for index in range(1, 17)]
-        final_fragment = b"\xff\xfe\xfd"
-        firmware = b"".join(fragments) + final_fragment
-        threshold_checksum = gatt_ota.pixart_ota.sum16(b"".join(fragments))
-        final_checksum = gatt_ota.pixart_ota.sum16(firmware)
+    async def test_host_limit_fragments_logical_blocks_without_changing_prn_window(self):
+        firmware = bytes(index % 251 for index in range(4096))
+        first_ack_fragment = firmware[3895:3904]
+        final_fragment = firmware[4092:4096]
+        threshold_checksum = 21464
+        final_checksum = 46408
         upgrade = gatt_ota.pixart_ota.build_upgrade(
             len(firmware), final_checksum, gatt_ota.OTA_VERSION
         )
         client = FakeGattClient(
-            reads=[init_response(max_object_size=1024, mtu_size=244, prn_threshold=16)],
+            reads=[init_response(max_object_size=4096, mtu_size=244, prn_threshold=16)],
             mtu_size=50,
             notify_after_write={
-                bytes.fromhex("25 00000000 00040000"): [bytes.fromhex("25 000000")],
-                fragments[-1]: [
+                bytes.fromhex("25 00000000 00100000"): [bytes.fromhex("25 000000")],
+                first_ack_fragment: [
                     b"\x17" + threshold_checksum.to_bytes(2, "little")
                 ],
                 final_fragment: [
@@ -701,7 +584,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine.last_state.mtu_size, 244)
         self.assertEqual(engine.host_wnr_limit, 47)
-        self.assertEqual(engine.effective_payload_chunk_size, 47)
+        self.assertEqual(engine.physical_fragment_size, 47)
         payload_writes = [
             event[2]
             for event in client.events
@@ -709,7 +592,17 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             and event[3] is False
             and event[2] != b"\x22\x00"
         ]
-        self.assertEqual(payload_writes, fragments + [final_fragment])
+        self.assertEqual(b"".join(payload_writes), firmware)
+        self.assertTrue(all(len(fragment) <= 47 for fragment in payload_writes))
+        self.assertEqual(
+            [len(fragment) for fragment in payload_writes[:6]],
+            [47, 47, 47, 47, 47, 9],
+        )
+        first_ack_write_index = payload_writes.index(first_ack_fragment)
+        self.assertEqual(
+            sum(map(len, payload_writes[: first_ack_write_index + 1])),
+            3904,
+        )
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
     async def test_invalid_or_missing_host_mtu_fails_closed_before_object(self):
@@ -748,10 +641,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(
             gatt_ota.GattTimeoutError,
-            r"object 0 payload 0 length 2 expected ACK 0x17.*"
+            r"object 0 logical payload 0 length 2 expected ACK 0x17.*"
             r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
             r"prn_threshold=1.*host WNR limit=244.*"
-            r"effective payload chunk size=2.*"
+            r"physical fragment size=2.*"
             r"WNR readiness false observations=1",
         ):
             await gatt_ota.GattOtaEngine(
@@ -776,10 +669,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(
             gatt_ota.GattTimeoutError,
-            r"object 0 payload 0 length 2 payload write.*"
+            r"object 0 logical payload 0 length 2 payload write.*"
             r"offset=0, checksum=0x0000, max_object_size=4, mtu_size=2, "
             r"prn_threshold=1.*host WNR limit=244.*"
-            r"effective payload chunk size=2",
+            r"physical fragment size=2",
         ):
             await gatt_ota.GattOtaEngine(
                 client,
@@ -1072,13 +965,15 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(upgrade, writes)
         self.assertNotIn(b"\x22\x00", writes)
 
-    async def test_prn_ack_before_final_wnr_write_returns_is_accepted(self):
-        firmware = b"\x01\x02"
-        upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
+    async def test_prn_ack_during_final_physical_fragment_is_accepted(self):
+        firmware = b"\x01\x02\x03\x04"
+        final_fragment = b"\x03\x04"
+        upgrade = bytes.fromhex("18 04000000 0a00 312e302e310000000000")
         client = AckBeforeWriteReturnsGattClient(
-            final_payload=firmware,
-            ack=bytes.fromhex("17 0300"),
-            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            final_payload=final_fragment,
+            ack=bytes.fromhex("17 0a00"),
+            reads=[init_response(max_object_size=4, mtu_size=4, prn_threshold=1)],
+            mtu_size=5,
             notify_after_write={
                 bytes.fromhex("25 00000000 04000000"): [bytes.fromhex("25 000000")],
                 upgrade: [bytes.fromhex("18 0000")],

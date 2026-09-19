@@ -175,13 +175,17 @@ class TransferPlanningTests(unittest.TestCase):
             ],
         )
 
-    def test_plan_uses_explicit_payload_chunk_size_for_prn_windows(self):
+    def test_plan_counts_device_logical_blocks_for_prn_windows(self):
+        firmware = bytes(index % 251 for index in range(4096))
         operations = list(
             ota.iter_transfer_operations(
-                bytes(range(1, 9)),
-                self.state(max_object_size=8, mtu_size=4, prn_threshold=3),
+                firmware,
+                self.state(
+                    max_object_size=4096,
+                    mtu_size=244,
+                    prn_threshold=16,
+                ),
                 "v1",
-                payload_chunk_size=2,
             )
         )
 
@@ -191,7 +195,10 @@ class TransferPlanningTests(unittest.TestCase):
                 for operation in operations
                 if operation.kind == "payload"
             ],
-            [b"\x01\x02", b"\x03\x04", b"\x05\x06", b"\x07\x08"],
+            [
+                firmware[offset : offset + 244]
+                for offset in range(0, 4096, 244)
+            ],
         )
         self.assertEqual(
             [
@@ -199,22 +206,8 @@ class TransferPlanningTests(unittest.TestCase):
                 for operation in operations
                 if operation.kind == "wait-prn"
             ],
-            [21, 36],
+            [21464, 46408],
         )
-
-    def test_plan_rejects_invalid_explicit_payload_chunk_size(self):
-        for chunk_size in (False, 0, -1, 1.5, 4):
-            with self.subTest(chunk_size=chunk_size), self.assertRaises(
-                ota.ProtocolError
-            ):
-                list(
-                    ota.iter_transfer_operations(
-                        b"\x01",
-                        self.state(mtu_size=3),
-                        "v1",
-                        payload_chunk_size=chunk_size,
-                    )
-                )
 
     def test_matching_resume_starts_at_reported_object_and_running_checksum(self):
         operations = list(

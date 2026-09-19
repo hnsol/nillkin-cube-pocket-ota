@@ -59,32 +59,30 @@ BleakのCoreBluetooth without-response writeはnative送信queueへの投入後�
 queueの空きを保証しません。そのため各raw payloadとresetのwrite直前に
 `canSendWriteWithoutResponse`を約1ms間隔、operation timeout内でpollし、trueの時だけ送信します。
 APIの例外、不正値、待機中の切断、timeoutはfail-closedです。OTAUtilityに合わせ、raw payloadは
-各write後に2ms待機します。`0x17` ACKはPRN threshold数の
-payload送信後、またはobject末尾（firmware末尾を含む）で待ち、すべてのboundaryでrunning
+各物理write後に2ms待機します。`0x17` ACKはPRN threshold数の
+論理ブロック送信後、またはobject末尾（firmware末尾を含む）で待ち、すべてのboundaryでrunning
 sum16との一致を厳密に検証します。3 bytes ACKのchecksumはbytes 1..2、4 bytes ACKでは
 bytes 2..3のlittle-endianです。
 FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だけを検査します。
 そのため実装も残りのopaque bytesを解釈しません。各object-createは、最終objectでも
 `0x27`で得たmax object size（配布FWは4096を広告）を宣言し、実際に送るpayloadだけを
 残りのbytesにします。
-ただしobject size、deviceのpayload chunk上限、PRN間隔、resume位置は実機の`0x27`応答で
+ただしobject size、deviceの論理ブロック長、PRN間隔、resume位置は実機の`0x27`応答で
 決まります。`GattOtaEngine`はその応答を検証してから送信します。`0x18` versionは
 OTAUtility設定から確認した`1.0.1`、retransmitは`ff02`の`0x28`を使います。
-`0x27`のmtu_sizeはraw payload受信長の上限であり固定長ではありません。payload chunk
-sizeにはdevice mtu_sizeとCoreBluetoothのwithout-response上限（host MTU - 3）の小さい方を
-使います。PRN windowの先頭でだけ古いnotifyを破棄し、window内のpayload間では破棄しません。
-payload dispatch順も通知に記録し、boundaryより前のwriteに対応する早期`0x17`はchecksumが
-一致しても採用しません。host上限を取得できない場合や不正な場合はobject-create前に停止します。
-診断用に`0x27`のoffset/checksum/max object size/MTU/PRN threshold、host上限、effective
-payload chunk sizeをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
-object/payload位置とWNR readinessのfalse観測回数・累積待機時間を含めます。
+`0x27`の`mtu_size=244`はBLEの物理MTUではなく、OTA上の論理payload block上限です。
+plannerは最大244 bytesの論理ブロックを生成し、PRN thresholdをその個数で数えます。
+PRN 16、object 4096 bytesでは最初のACKを3904 bytes（244×16）後、次をobject末尾の
+4096 bytes後に待ちます。running sum16もこの2境界に一致させます。
 
-vendor実装はraw payloadをWNRで送りますが、macOS実機ではWNR上限20/47 bytes、WR上限
-512 bytesを観測しています。`--corebluetooth-long-write`は`--execute`専用の明示的な
-実験オプションで、raw payloadだけをdeviceの`mtu_size`単位のWRで`ff01`へ送ります。
-native peripheralの`maximumWriteValueLengthForType(CBCharacteristicWriteWithResponse)`を
-取得し、deviceの`mtu_size`以上であることをobject-create前に検証します。非CoreBluetooth、
-内部API取得不能、不正値、上限不足はfail-closedです。object/ACK/checksum/upgrade/resetの
-modeと検証は変えません。診断にはpayload mode、WR上限、chunk sizeを含めます。
-このWR経路は実機未検証です。
+GATT engineは各論理ブロックをCoreBluetoothのWNR上限（host MTU - 3）以下の物理断片へ
+分割します。実測はSteam DeckでMTU 23／最大20 bytes、macOSでMTU 50／最大47 bytesです。
+raw payloadはWNRのみで送信し、各物理断片ごとにreadiness確認、dispatch counter更新、
+2ms pacingを行います。PRN windowの先頭でだけ古いnotifyを破棄し、window内の断片間では
+破棄しません。payload dispatch順も通知に記録し、boundaryより前のwriteに対応する早期`0x17`はchecksumが
+一致しても採用しません。host上限を取得できない場合や不正な場合はobject-create前に停止します。
+診断用に`0x27`のoffset/checksum/max object size/論理ブロック長/PRN threshold、host WNR上限、
+物理断片サイズをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
+object/論理payload位置・長さとWNR readinessのfalse観測回数・累積待機時間を含めます。
+244-byte単位のWRは実機でACKを得られなかったため、WR経路と実験オプションはありません。
 `--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。
