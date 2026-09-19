@@ -632,7 +632,7 @@ class GattOtaEngine:
                 raise GattOtaError(f"stop notify failed: {exc}") from exc
 
     @staticmethod
-    def _resume_matches(firmware: bytes, state: pixart_ota.OtaState) -> bool:
+    def resume_matches(firmware: bytes, state: pixart_ota.OtaState) -> bool:
         object_count = (
             len(firmware) + state.max_object_size - 1
         ) // state.max_object_size
@@ -640,6 +640,13 @@ class GattOtaEngine:
             return False
         prefix_end = min(state.offset * state.max_object_size, len(firmware))
         return pixart_ota.sum16(firmware[:prefix_end]) == state.checksum
+
+    async def inspect_state(self, firmware_size: int) -> pixart_ota.OtaState:
+        """Read the resumable OTA state without notifications or state changes."""
+        self._claim_once()
+        state = await self._read_state(firmware_size)
+        self.last_state = state
+        return state
 
     async def flash(self, firmware: AuthorizedFirmware) -> pixart_ota.OtaState:
         data = self._authorized_data(firmware, AuthorizationMode.FLASH)
@@ -678,7 +685,7 @@ class GattOtaEngine:
             state = await self._read_state(len(data))
             self.last_state = state
             self._validate_payload_transport(state)
-            if not self._resume_matches(data, state):
+            if not self.resume_matches(data, state):
                 await self._write(
                     self._retransmit, pixart_ota.build_retransmit(), response=True
                 )

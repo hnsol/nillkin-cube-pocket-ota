@@ -9,20 +9,68 @@ import argparse
 import asyncio
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 if __package__:
-    from . import firmware_image, gatt_ota, macos_ota, phase1_ble_info
+    from . import firmware_image, gatt_ota, macos_ota, phase1_ble_info, pixart_ota
 else:
     import firmware_image
     import gatt_ota
     import macos_ota
     import phase1_ble_info
+    import pixart_ota
 
 
 class RecoveryPreflightError(RuntimeError):
     """GLOBAL recovery cannot safely begin."""
+
+
+@dataclass(frozen=True)
+class RecoveryStateReport:
+    advertised_name: str
+    gatt_model: str
+    state: pixart_ota.OtaState
+    prefix_matches: bool
+
+
+async def inspect_state_on_client(
+    client: Any,
+    *,
+    advertised_name: str,
+    image: firmware_image.ValidatedImage,
+    data: bytes,
+    operation_timeout: float,
+    settle_seconds: float = 0.03,
+) -> RecoveryStateReport:
+    """Read only the GLOBAL resume state using vendor command 0x27."""
+    global_profile = firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL]
+    if image.profile != global_profile:
+        raise RecoveryPreflightError("診断には承認済みGLOBAL FWだけを指定できます")
+    services = list(client.services)
+    characteristics = phase1_ble_info.inspect_gatt(services)
+    model = await phase1_ble_info._read_optional_device_info(
+        client, services, "2a24", operation_timeout=operation_timeout
+    )
+    expected_model = global_profile.hardware_model.decode("ascii")
+    if model != expected_model:
+        raise RecoveryPreflightError(
+            f"GATT modelが{expected_model}ではありません: {model or 'unavailable'}"
+        )
+    engine = gatt_ota.GattOtaEngine(
+        client,
+        control_characteristic=characteristics["ff01"].characteristic,
+        settle_seconds=settle_seconds,
+        operation_timeout=operation_timeout,
+    )
+    state = await engine.inspect_state(len(data))
+    return RecoveryStateReport(
+        advertised_name=advertised_name,
+        gatt_model=model,
+        state=state,
+        prefix_matches=engine.resume_matches(data, state),
+    )
 
 
 async def recover_on_client(
@@ -72,7 +120,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="BLE広告が残るCube Pocketを承認済みGLOBAL FWへ復旧する"
     )
     parser.add_argument("--firmware", required=True, metavar="PATH")
-    parser.add_argument("--execute", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--execute", action="store_true")
+    mode.add_argument(
+        "--inspect-state",
+        action="store_true",
+        help="0x27状態照会だけを送りGLOBALの保持状態を表示する",
+    )
     parser.add_argument("--confirm-sha256", metavar="SHA256")
     parser.add_argument("--scan-timeout", type=float, default=15.0)
     parser.add_argument("--connect-timeout", type=float, default=10.0)
@@ -113,13 +167,58 @@ async def _run(
         )
 
 
+async def _run_inspect(
+    args: argparse.Namespace, image: firmware_image.ValidatedImage, data: bytes
+) -> RecoveryStateReport:
+    try:
+        from bleak import BleakClient, BleakScanner
+    except ImportError as exc:
+        raise phase1_ble_info.Phase1Error("Bleakがありません") from exc
+    target = await macos_ota._scan_target(
+        BleakScanner,
+        timeout=args.scan_timeout,
+        device_uuid=args.device_uuid,
+    )
+    factory = phase1_ble_info.make_bleak_client_factory(BleakClient)
+    async with factory(target.device, timeout=args.connect_timeout) as client:
+        return await inspect_state_on_client(
+            client,
+            advertised_name=target.advertised_name,
+            image=image,
+            data=data,
+            operation_timeout=args.operation_timeout,
+        )
+
+
+def print_state_report(report: RecoveryStateReport) -> None:
+    state = report.state
+    print(f"Advertised name: {report.advertised_name}")
+    print(f"GATT model: {report.gatt_model}")
+    print(f"Offset (objects): {state.offset}")
+    print(f"Checksum: 0x{state.checksum:04X}")
+    print(f"Max object size: {state.max_object_size}")
+    print(f"MTU size: {state.mtu_size}")
+    print(f"PRN threshold: {state.prn_threshold}")
+    print("GLOBAL prefix match: " + ("yes" if report.prefix_matches else "no"))
+    print("Result: 状態照会のみ完了。FW書込み・確定・再起動は未実施です。")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if not args.execute:
-        print("error: 復旧を開始するには--executeが必要です", file=sys.stderr)
+    if not args.execute and not args.inspect_state:
+        print(
+            "error: 復旧には--execute、状態照会には--inspect-stateが必要です",
+            file=sys.stderr,
+        )
         return 2
-    if not args.confirm_sha256:
+    if args.execute and not args.confirm_sha256:
         print("error: --executeには--confirm-sha256が必要です", file=sys.stderr)
+        return 2
+    if args.accept_factory_signature and not args.execute:
+        print(
+            "error: --accept-factory-signatureは--execute時だけ指定できます",
+            file=sys.stderr,
+        )
         return 2
     timeouts = (args.scan_timeout, args.connect_timeout, args.operation_timeout)
     if not all(math.isfinite(value) and value > 0 for value in timeouts):
@@ -130,10 +229,13 @@ def main(argv: list[str] | None = None) -> int:
         image = firmware_image.validate_image(data)
         if image.profile.kind is not firmware_image.ImageKind.GLOBAL:
             raise RecoveryPreflightError("復旧には承認済みGLOBAL FWだけを指定できます")
-        if args.confirm_sha256 != image.profile.sha256:
+        if args.execute and args.confirm_sha256 != image.profile.sha256:
             print("error: --confirm-sha256が対象FWと完全一致しません", file=sys.stderr)
             return 2
-        report = asyncio.run(_run(args, image, data))
+        if args.inspect_state:
+            state_report = asyncio.run(_run_inspect(args, image, data))
+        else:
+            report = asyncio.run(_run(args, image, data))
     except (
         OSError,
         firmware_image.ImageValidationError,
@@ -146,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("中断しました。復旧が未完了の可能性があります。", file=sys.stderr)
         return 130
+    if args.inspect_state:
+        print_state_report(state_report)
+        return 0
     macos_ota.print_report(report)
     print("Result: GLOBAL FWの復旧送信完了。機器の再起動・再接続を確認してください。")
     return 0

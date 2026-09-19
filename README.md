@@ -123,6 +123,18 @@ python3 -m tools.macos_ota \
 
 GLOBAL復旧は、固定GLOBAL原本だけを許す別CLIです。
 
+中断後の保持状態は、FWを書き込まずに`0x27`状態照会だけで確認できます。
+
+```sh
+python3 -m tools.macos_recover \
+  --firmware firmware/original/B077T_US_13.bin \
+  --inspect-state
+```
+
+表示される`GLOBAL prefix match`は、実機のoffset/checksumが指定GLOBALの
+同じprefixと一致するかを示します。このモードは`0x28`、FWデータ、`0x18`、
+`0x22`を送信しません。
+
 ```sh
 python3 -m tools.macos_recover \
   --firmware firmware/original/B077T_US_13.bin \

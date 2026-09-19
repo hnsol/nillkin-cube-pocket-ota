@@ -1562,6 +1562,32 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_inspect_state_only_writes_init_new_and_reads_state(self):
+        client = FakeGattClient(
+            reads=[
+                init_response(
+                    offset=3,
+                    checksum=0x1234,
+                    max_object_size=4096,
+                    mtu_size=244,
+                    prn_threshold=16,
+                )
+            ]
+        )
+
+        state = await gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.1
+        ).inspect_state(123_916)
+
+        self.assertEqual((state.offset, state.checksum), (3, 0x1234))
+        self.assertEqual(
+            client.events,
+            [
+                ("write", "ff01", bytes.fromhex("27 0ce40100 00"), True),
+                ("read", "ff01"),
+            ],
+        )
+
     async def test_flash_reports_state_when_retransmit_does_not_clear_resume(self):
         client = FakeGattClient(reads=[init_response(offset=1, checksum=10)])
 
