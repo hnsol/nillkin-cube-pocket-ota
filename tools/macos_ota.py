@@ -39,6 +39,7 @@ _FACTORY_NAME = "Cube Pocket Keyboard 3"
 _INSTALLED_GLOBAL_FW_INFO = bytes.fromhex(
     "0e 09 23 00 31 2e 30 2e 31 27 ec"
 )
+_INSTALLED_REMAP_FW_INFO_HEADER = bytes.fromhex("0e 09 23 00") + b"1.0.1"
 
 
 class ExecutePreflightError(RuntimeError):
@@ -60,6 +61,7 @@ class PreflightReport:
     blockers: tuple[str, ...]
     factory_signature_matched: bool = False
     installed_global_signature_matched: bool = False
+    installed_remap_signature_matched: bool = False
 
 
 def _is_approved_image(image: firmware_image.ValidatedImage | None) -> bool:
@@ -88,6 +90,41 @@ def _is_installed_signature_target(
     ]
 
 
+def _installed_remap_expected_sum16(
+    config: keymap_config.KeymapConfig | None,
+) -> int:
+    """Compute the full-file sum16 the device would report for the target config."""
+    if config is None:
+        return firmware_image.APPROVED_IMAGES[
+            firmware_image.ImageKind.JP_LANG
+        ].full_file_sum16
+    return phase3_build_patch.configured_spec(config).patched_sum16
+
+
+def _installed_remap_fw_info(sum16: int) -> bytes:
+    return _INSTALLED_REMAP_FW_INFO_HEADER + sum16.to_bytes(2, "little")
+
+
+def resolve_installed_remap_fw_info(
+    config: keymap_config.KeymapConfig | None,
+) -> bytes:
+    """Resolve the expected 0x23 raw response for the installed remapped image.
+
+    Rejects an identity config (one whose sum16 equals GLOBAL's), since that
+    signature must instead be recognized by --accept-installed-global-signature.
+    """
+    sum16 = _installed_remap_expected_sum16(config)
+    global_sum16 = firmware_image.APPROVED_IMAGES[
+        firmware_image.ImageKind.GLOBAL
+    ].full_file_sum16
+    if sum16 == global_sum16:
+        raise ExecutePreflightError(
+            "--installed-remap-configがGLOBALと同一の構成です。"
+            "--accept-installed-global-signatureを使用してください"
+        )
+    return _installed_remap_fw_info(sum16)
+
+
 def evaluate_preflight(
     identity: ble_transport.GattIdentity,
     model: str | ota_protocol.ModelIdentity | None,
@@ -96,6 +133,8 @@ def evaluate_preflight(
     *,
     accept_factory_signature: bool = False,
     accept_installed_global_signature: bool = False,
+    accept_installed_remap_signature: bool = False,
+    installed_remap_fw_info: bytes | None = None,
 ) -> PreflightReport:
     """Evaluate future write gates without performing any device I/O."""
     vendor_model = _model_value(model)
@@ -123,10 +162,24 @@ def evaluate_preflight(
         and current_fw.raw == _INSTALLED_GLOBAL_FW_INFO
         and _is_installed_signature_target(image)
     )
+    installed_remap_signature_matched = bool(
+        accept_installed_remap_signature
+        and vendor_model is None
+        and identity.advertised_name in phase1_ble_info.TARGET_NAMES
+        and identity.gatt_model == "PAR2801"
+        and identity.gatt_revision == "1.0.0"
+        and _REQUIRED_GATT.issubset(services)
+        and installed_remap_fw_info is not None
+        and current_fw.raw == installed_remap_fw_info
+        and _is_approved_image(image)
+    )
 
     if (
-        vendor_model is None or not vendor_model.startswith("B077T")
-    ) and not factory_signature_matched and not installed_global_signature_matched:
+        (vendor_model is None or not vendor_model.startswith("B077T"))
+        and not factory_signature_matched
+        and not installed_global_signature_matched
+        and not installed_remap_signature_matched
+    ):
         blockers.append("Vendor OTA model B077Tを確認できません")
     if identity.advertised_name not in phase1_ble_info.TARGET_NAMES:
         blockers.append("advertised nameがallowlistと一致しません")
@@ -154,6 +207,7 @@ def evaluate_preflight(
         blockers=tuple(blockers),
         factory_signature_matched=factory_signature_matched,
         installed_global_signature_matched=installed_global_signature_matched,
+        installed_remap_signature_matched=installed_remap_signature_matched,
     )
 
 
@@ -169,6 +223,8 @@ async def collect_preflight(
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
     accept_installed_global_signature: bool = False,
+    accept_installed_remap_signature: bool = False,
+    installed_remap_fw_info: bytes | None = None,
 ) -> PreflightReport:
     """Collect the fixed read-only Phase 1 sequence and evaluate its gates."""
     result = await phase1_ble_info.collect_phase1_info(
@@ -198,6 +254,8 @@ async def collect_preflight(
         image,
         accept_factory_signature=accept_factory_signature,
         accept_installed_global_signature=accept_installed_global_signature,
+        accept_installed_remap_signature=accept_installed_remap_signature,
+        installed_remap_fw_info=installed_remap_fw_info,
     )
 
 
@@ -211,6 +269,8 @@ async def collect_preflight_on_client(
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
     accept_installed_global_signature: bool = False,
+    accept_installed_remap_signature: bool = False,
+    installed_remap_fw_info: bytes | None = None,
 ) -> PreflightReport:
     """Run the confirmed read-only probe without reconnecting the client."""
     services = list(client.services)
@@ -278,6 +338,8 @@ async def collect_preflight_on_client(
         image,
         accept_factory_signature=accept_factory_signature,
         accept_installed_global_signature=accept_installed_global_signature,
+        accept_installed_remap_signature=accept_installed_remap_signature,
+        installed_remap_fw_info=installed_remap_fw_info,
     )
 
 
@@ -293,6 +355,8 @@ async def execute_on_client(
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
     accept_installed_global_signature: bool = False,
+    accept_installed_remap_signature: bool = False,
+    installed_remap_fw_info: bytes | None = None,
 ) -> PreflightReport:
     """Authorize and flash only after a fresh probe on this exact connection."""
     if sum(
@@ -300,6 +364,7 @@ async def execute_on_client(
             probe_vendor_model,
             accept_factory_signature,
             accept_installed_global_signature,
+            accept_installed_remap_signature,
         )
     ) > 1:
         raise ExecutePreflightError(
@@ -313,6 +378,8 @@ async def execute_on_client(
         probe_vendor_model=probe_vendor_model,
         accept_factory_signature=accept_factory_signature,
         accept_installed_global_signature=accept_installed_global_signature,
+        accept_installed_remap_signature=accept_installed_remap_signature,
+        installed_remap_fw_info=installed_remap_fw_info,
     )
     if not report.ready_for_future_flash:
         raise ExecutePreflightError(
@@ -324,10 +391,12 @@ async def execute_on_client(
         image.profile.kind is not firmware_image.ImageKind.GLOBAL
         and not probe_vendor_model
         and not accept_installed_global_signature
+        and not accept_installed_remap_signature
     ):
         raise ExecutePreflightError(
-            "JP_LANG/CONFIGUREDには--probe-vendor-modelまたは"
-            "--accept-installed-global-signatureが必要です"
+            "JP_LANG/CONFIGUREDには--probe-vendor-model、"
+            "--accept-installed-global-signatureまたは"
+            "--accept-installed-remap-signatureが必要です"
         )
     authorization_model = report.vendor_ota_model
     if authorization_model is None:
@@ -342,7 +411,16 @@ async def execute_on_client(
             and report.installed_global_signature_matched
             and _is_installed_signature_target(image)
         )
-        if not (factory_fallback or installed_global_fallback):
+        installed_remap_fallback = (
+            accept_installed_remap_signature
+            and report.installed_remap_signature_matched
+            and _is_approved_image(image)
+        )
+        if not (
+            factory_fallback
+            or installed_global_fallback
+            or installed_remap_fallback
+        ):
             raise ExecutePreflightError("Vendor OTA model B077Tを確認できません")
         authorization_model = global_profile.embedded_version.decode("ascii")
     if config is None:
@@ -377,6 +455,14 @@ def print_report(report: PreflightReport) -> None:
         + (
             "matched"
             if report.installed_global_signature_matched
+            else "not used"
+        )
+    )
+    print(
+        "Installed remap signature: "
+        + (
+            "matched"
+            if report.installed_remap_signature_matched
             else "not used"
         )
     )
@@ -459,6 +545,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="導入済みGLOBAL fingerprintからJP_LANG/設定生成FWへの書込みを許可する",
     )
     parser.add_argument(
+        "--accept-installed-remap-signature",
+        action="store_true",
+        help=(
+            "導入済みJP_LANG/設定生成FW fingerprintからGLOBAL/JP_LANG/"
+            "設定生成FWへの書込みを許可する"
+        ),
+    )
+    parser.add_argument(
+        "--installed-remap-config",
+        metavar="PATH",
+        help=(
+            "--accept-installed-remap-signatureで導入済みFWのchecksumを"
+            "算出するTOML設定（省略時は固定JP_LANGを仮定する）"
+        ),
+    )
+    parser.add_argument(
         "--probe-vendor-model",
         action="store_true",
         help="0x10→0x23後に同一接続で0x2A→0x2Bを明示的に試す",
@@ -536,6 +638,7 @@ async def _run_execute(
     *,
     base_data: bytes | None = None,
     config: keymap_config.KeymapConfig | None = None,
+    installed_remap_fw_info: bytes | None = None,
 ) -> PreflightReport:
     try:
         from bleak import BleakClient, BleakScanner
@@ -563,6 +666,10 @@ async def _run_execute(
             accept_installed_global_signature=getattr(
                 args, "accept_installed_global_signature", False
             ),
+            accept_installed_remap_signature=getattr(
+                args, "accept_installed_remap_signature", False
+            ),
+            installed_remap_fw_info=installed_remap_fw_info,
         )
 
 
@@ -580,10 +687,24 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.accept_installed_remap_signature and not args.execute:
+        print(
+            "error: --accept-installed-remap-signatureは--execute時だけ指定できます",
+            file=sys.stderr,
+        )
+        return 2
+    if args.installed_remap_config and not args.accept_installed_remap_signature:
+        print(
+            "error: --installed-remap-configは"
+            "--accept-installed-remap-signatureと組で指定してください",
+            file=sys.stderr,
+        )
+        return 2
     if sum(
         (
             args.accept_factory_signature,
             args.accept_installed_global_signature,
+            args.accept_installed_remap_signature,
             args.probe_vendor_model,
         )
     ) > 1:
@@ -636,8 +757,29 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             print_transfer_plan(image, data)
             return 0
+        installed_remap_fw_info: bytes | None = None
+        if args.accept_installed_remap_signature:
+            installed_remap_config = (
+                keymap_config.load_config(args.installed_remap_config)
+                if args.installed_remap_config
+                else None
+            )
+            try:
+                installed_remap_fw_info = resolve_installed_remap_fw_info(
+                    installed_remap_config
+                )
+            except ExecutePreflightError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
         report = asyncio.run(
-            _run_execute(args, image, data, base_data=base_data, config=config)
+            _run_execute(
+                args,
+                image,
+                data,
+                base_data=base_data,
+                config=config,
+                installed_remap_fw_info=installed_remap_fw_info,
+            )
             if args.execute
             else _run(args, image)
         )

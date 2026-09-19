@@ -29,6 +29,16 @@ FWを送信しません。実行時は固定GLOBAL/JP_LANG imageのSHA-256を
 `0e 09 23 00 31 2e 30 2e 31 27 ec`を同一接続で完全一致させ、固定JP_LANGまたはGLOBAL原本と
 TOMLから完全再生成できる設定imageだけを許可します。GLOBALへの書込みには使用できません。
 
+導入済みのリマップ済みFW（JP_LANGまたは設定生成image）からGLOBAL/JP_LANG/設定生成imageへの
+書込みには`--accept-installed-remap-signature`を使用します。一致条件はinstalled-GLOBAL gateと
+同じ枠組みで、advertised name 1/2/3、`PAR2801`、revision `1.0.0`、必須GATT構成、そして`0x23`の
+raw応答が`0e 09 23 00 31 2e 30 2e 31`に続けて期待sum16をlittle-endianで結合した値（例: JP_LANGなら
+`... 29 ec`）と完全一致することを要求します。書込み先はGLOBAL・JP_LANG・設定生成imageのいずれかで、
+他の3つの識別オプション（`--accept-factory-signature`、`--accept-installed-global-signature`、
+`--probe-vendor-model`）とは互いに排他的です。リマップ済みimageはGLOBALとkeymap部のbyteだけが異なり、
+OTAの実装経路自体はGLOBALと同一であるため、このgateを追加しています。2026-09-19時点で実機検証は
+していません。
+
 工場出荷FWから固定GLOBALへの初回更新だけは、`--accept-factory-signature`で限定fallbackを
 明示できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision
 `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答
@@ -43,7 +53,8 @@ Vendor OTA modelは`unavailable`のままとし、factory signature一致を別f
 
 実施順は、factory signatureでGLOBALのみを書込み、再起動・再接続後に
 installed GLOBAL signature（または取得できる場合は`B077T` model）を確認し、その後に
-JP_LANGを書き込む順です。
+JP_LANGを書き込む順です。任意の第3段階として、リマップ済みFWが稼働している状態から
+installed-remap signatureを確認し、別のGLOBAL/JP_LANG/設定生成imageへ書き込むこともできます。
 CLIはこの連続手順を自動実行しません。CoreBluetooth UUIDは`--device-uuid`でscan対象を
 絞る用途だけであり、本人性の判定には使いません。
 

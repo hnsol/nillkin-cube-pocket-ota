@@ -67,6 +67,24 @@ CoreBluetooth UUIDはMac固有なので本人性の判定には使いません�
 
 `0xEC27`ならGLOBAL、`0xEC29`ならJP_LANGが起動しています。
 
+## リマップ済みFWからの再書込み
+
+JP_LANGや、TOMLから生成したFWが一度でも稼働すると、`0x23`はそのイメージのchecksum（例:
+JP_LANGなら`0xEC29`）を報告するようになり、`--accept-installed-global-signature`は
+一致しなくなります（このgateは`0xEC27`固定のGLOBAL fingerprintだけを見ています）。
+この状態から別のイメージへ書き込むには`--accept-installed-remap-signature`を使います。
+
+- 既定では、導入済みFWを固定JP_LANG（`1.0.1 / 0xEC29`）と仮定します。
+- 独自TOMLで生成したFWが稼働している場合は、同じTOMLを`--installed-remap-config`で
+  渡します。期待checksumはGLOBALのsum16 `0xEC27`に、そのTOMLによる`(new-old)`差分の
+  合計をmod `0x10000`で加えた値です。
+- 許可される書込み先は、固定GLOBAL、固定JP_LANG、TOMLから再生成した設定FWのいずれかです。
+- 渡したTOMLがGLOBALと同一構成（sum == `0xEC27`）の場合は拒否されます。その場合は
+  `--accept-installed-global-signature`を使ってください。
+- **書き込んだTOMLは必ず保管してください。** 保管していないと、稼働中のFWをこのgateで
+  認識できません。
+- この経路はunit testのみで検証済みで、2026-09-19時点で実機未検証です。
+
 ## checkpointの読み方
 
 `tools.macos_recover --inspect-state`はFW本体を書き込まず、保持中のcheckpointを表示します。
@@ -92,6 +110,7 @@ BLE広告が出ない完全brick状態は、このツールだけでは照会・
 - 確認済みGLOBAL原本と同じ設定から、対象FWを毎回再生成する。
 - 指定していない物理キーは変更されない。
 - 生成後の差分、sum16、SHA-256を保存する。
+- 書き込んだTOMLを保管する。`--accept-installed-remap-signature`で稼働中FWを認識するのに必要。
 - vendor firmwareとWindows toolはリポジトリに含まれない。
 
 ## 通信上の重要な前提

@@ -25,6 +25,9 @@ FW_INFO_FRAME = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
 INSTALLED_GLOBAL_FW_INFO_FRAME = bytes.fromhex(
     "0e 09 23 00 31 2e 30 2e 31 27 ec"
 )
+INSTALLED_REMAP_FW_INFO_FRAME = bytes.fromhex(
+    "0e 09 23 00 31 2e 30 2e 31 29 ec"
+)
 MODEL_INFO_FRAME = bytes.fromhex(
     "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00 00 00 00 00 00 00 00"
 )
@@ -62,6 +65,10 @@ def current_firmware() -> ota_protocol.OtaFirmwareInfo:
 
 def installed_global_firmware() -> ota_protocol.OtaFirmwareInfo:
     return ota_protocol.parse_firmware_info(INSTALLED_GLOBAL_FW_INFO_FRAME)
+
+
+def installed_remap_firmware() -> ota_protocol.OtaFirmwareInfo:
+    return ota_protocol.parse_firmware_info(INSTALLED_REMAP_FW_INFO_FRAME)
 
 
 def normal_script() -> list[GattStep]:
@@ -281,6 +288,154 @@ class PreflightEvaluationTests(unittest.TestCase):
         self.assertFalse(report.installed_global_signature_matched)
         self.assertFalse(report.ready_for_future_flash)
 
+    def test_installed_remap_signature_accepts_global_jp_lang_and_configured_targets(
+        self,
+    ):
+        installed_remap_fw_info = ota.resolve_installed_remap_fw_info(None)
+        configured_image = firmware_image.ValidatedImage(
+            profile=firmware_image.FirmwareProfile(
+                kind=firmware_image.ImageKind.CONFIGURED,
+                size=1,
+                sha256="configured",
+                full_file_sum16=0,
+                embedded_version=b"B077T_US_13",
+                hardware_model=b"PAR2801",
+                keymap_marker_offset=0,
+            ),
+            keymap=(),
+        )
+        report = None
+        for image in (approved_image(), approved_jp_image(), configured_image):
+            with self.subTest(image=image):
+                report = ota.evaluate_preflight(
+                    expected_identity(),
+                    ota_protocol.ModelIdentity.UNAVAILABLE,
+                    installed_remap_firmware(),
+                    image,
+                    accept_installed_remap_signature=True,
+                    installed_remap_fw_info=installed_remap_fw_info,
+                )
+                self.assertTrue(report.ready_for_future_flash)
+                self.assertTrue(report.installed_remap_signature_matched)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            ota.print_report(report)
+        self.assertIn("Installed remap signature: matched", output.getvalue())
+
+    def test_installed_remap_signature_requires_every_fingerprint_component(self):
+        installed_remap_fw_info = ota.resolve_installed_remap_fw_info(None)
+        cases = (
+            expected_identity(advertised_name="other"),
+            expected_identity(gatt_model="PAR9999"),
+            expected_identity(gatt_revision="1.0.1"),
+            expected_identity(service_uuids=("ff00", "ff01", "ff02")),
+        )
+        for identity in cases:
+            with self.subTest(identity=identity):
+                report = ota.evaluate_preflight(
+                    identity,
+                    ota_protocol.ModelIdentity.UNAVAILABLE,
+                    installed_remap_firmware(),
+                    approved_image(),
+                    accept_installed_remap_signature=True,
+                    installed_remap_fw_info=installed_remap_fw_info,
+                )
+                self.assertFalse(report.installed_remap_signature_matched)
+                self.assertFalse(report.ready_for_future_flash)
+
+        for wrong_checksum in (0xEC27, 0xEC2A):
+            report = ota.evaluate_preflight(
+                expected_identity(),
+                ota_protocol.ModelIdentity.UNAVAILABLE,
+                ota_protocol.OtaFirmwareInfo(
+                    version="1.0.1",
+                    checksum=wrong_checksum,
+                    raw=INSTALLED_REMAP_FW_INFO_FRAME[:-2]
+                    + wrong_checksum.to_bytes(2, "little"),
+                ),
+                approved_image(),
+                accept_installed_remap_signature=True,
+                installed_remap_fw_info=installed_remap_fw_info,
+            )
+            self.assertFalse(report.installed_remap_signature_matched)
+            self.assertFalse(report.ready_for_future_flash)
+
+    def test_installed_remap_signature_requires_the_flag(self):
+        installed_remap_fw_info = ota.resolve_installed_remap_fw_info(None)
+        report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            installed_remap_firmware(),
+            approved_image(),
+            accept_installed_remap_signature=False,
+            installed_remap_fw_info=installed_remap_fw_info,
+        )
+        self.assertFalse(report.installed_remap_signature_matched)
+        self.assertFalse(report.ready_for_future_flash)
+
+    def test_installed_remap_signature_with_known_vendor_model_behaves_as_normal_gate(
+        self,
+    ):
+        installed_remap_fw_info = ota.resolve_installed_remap_fw_info(None)
+        report = ota.evaluate_preflight(
+            expected_identity(),
+            "B077T",
+            installed_remap_firmware(),
+            approved_image(),
+            accept_installed_remap_signature=True,
+            installed_remap_fw_info=installed_remap_fw_info,
+        )
+        self.assertFalse(report.installed_remap_signature_matched)
+        self.assertTrue(report.ready_for_future_flash)
+
+    def test_installed_remap_signature_computes_expected_sum_from_config(self):
+        config = keymap_config.KeymapConfig(
+            {"caps_lock": keymap_config.HID_USAGES["left_control"]}
+        )
+        installed_remap_fw_info = ota.resolve_installed_remap_fw_info(config)
+        expected_sum16 = (0xEC27 + (0xE0 - 0x39)) & 0xFFFF
+        self.assertEqual(
+            installed_remap_fw_info,
+            bytes.fromhex("0e 09 23 00")
+            + b"1.0.1"
+            + expected_sum16.to_bytes(2, "little"),
+        )
+
+        matching_report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            ota_protocol.parse_firmware_info(installed_remap_fw_info),
+            approved_image(),
+            accept_installed_remap_signature=True,
+            installed_remap_fw_info=installed_remap_fw_info,
+        )
+        self.assertTrue(matching_report.installed_remap_signature_matched)
+        self.assertTrue(matching_report.ready_for_future_flash)
+
+        one_byte_off = installed_remap_fw_info[:-2] + (
+            expected_sum16 - 1
+        ).to_bytes(2, "little")
+        mismatched_report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            ota_protocol.parse_firmware_info(one_byte_off),
+            approved_image(),
+            accept_installed_remap_signature=True,
+            installed_remap_fw_info=installed_remap_fw_info,
+        )
+        self.assertFalse(mismatched_report.installed_remap_signature_matched)
+        self.assertFalse(mismatched_report.ready_for_future_flash)
+
+    def test_installed_remap_signature_rejects_identity_config(self):
+        identity_config = keymap_config.KeymapConfig(
+            {"caps_lock": keymap_config.HID_USAGES["caps_lock"]}
+        )
+        with self.assertRaisesRegex(
+            ota.ExecutePreflightError, "accept-installed-global-signature"
+        ):
+            ota.resolve_installed_remap_fw_info(identity_config)
+
 
 class ParserSafetyTests(unittest.TestCase):
     def test_cli_accepts_factory_signature_and_vendor_probe_flags(self):
@@ -298,6 +453,59 @@ class ParserSafetyTests(unittest.TestCase):
             ["--firmware", "fw.bin", "--accept-installed-global-signature"]
         )
         self.assertTrue(installed.accept_installed_global_signature)
+
+        installed_remap = ota.build_parser().parse_args(
+            [
+                "--firmware",
+                "fw.bin",
+                "--accept-installed-remap-signature",
+                "--installed-remap-config",
+                "layout.toml",
+            ]
+        )
+        self.assertTrue(installed_remap.accept_installed_remap_signature)
+        self.assertEqual(installed_remap.installed_remap_config, "layout.toml")
+
+    def test_cli_rejects_installed_remap_signature_without_execute_or_with_other_gates(
+        self,
+    ):
+        cases = (
+            ["--firmware", "unused.bin", "--accept-installed-remap-signature"],
+            ["--firmware", "unused.bin", "--installed-remap-config", "layout.toml"],
+            [
+                "--firmware",
+                "unused.bin",
+                "--execute",
+                "--accept-installed-remap-signature",
+                "--probe-vendor-model",
+                "--confirm-sha256",
+                "unused",
+            ],
+            [
+                "--firmware",
+                "unused.bin",
+                "--execute",
+                "--accept-installed-remap-signature",
+                "--accept-factory-signature",
+                "--confirm-sha256",
+                "unused",
+            ],
+            [
+                "--firmware",
+                "unused.bin",
+                "--execute",
+                "--accept-installed-remap-signature",
+                "--accept-installed-global-signature",
+                "--confirm-sha256",
+                "unused",
+            ],
+        )
+        for args in cases:
+            with self.subTest(args=args):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    status = ota.main(args)
+                self.assertEqual(status, 2)
 
     def test_cli_rejects_installed_global_signature_without_execute_or_with_other_gates(
         self,
@@ -348,6 +556,46 @@ class ParserSafetyTests(unittest.TestCase):
                 with redirect_stderr(stderr):
                     status = ota.main(args)
                 self.assertEqual(status, 2)
+
+    def test_cli_rejects_identity_installed_remap_config_before_ble(self):
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".toml", delete=False
+        ) as handle:
+            handle.write('format_version = 1\n\n[remap]\ncaps_lock = "caps_lock"\n')
+            config_path = handle.name
+        image = approved_image()
+        try:
+            stderr = io.StringIO()
+            with (
+                patch.object(Path, "read_bytes", return_value=b"approved"),
+                patch.object(
+                    firmware_image, "validate_image", return_value=image
+                ),
+                patch.object(
+                    ota,
+                    "_run_execute",
+                    side_effect=AssertionError("BLE path must not run"),
+                ),
+                redirect_stderr(stderr),
+            ):
+                status = ota.main(
+                    [
+                        "--firmware",
+                        "fw.bin",
+                        "--execute",
+                        "--accept-installed-remap-signature",
+                        "--installed-remap-config",
+                        config_path,
+                        "--confirm-sha256",
+                        image.profile.sha256,
+                    ]
+                )
+            self.assertEqual(status, 2)
+            self.assertIn("accept-installed-global-signature", stderr.getvalue())
+        finally:
+            os.unlink(config_path)
 
     def test_cli_execute_requires_exact_target_sha256(self):
         args = ota.build_parser().parse_args(
@@ -592,6 +840,73 @@ class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
                 data=data,
                 operation_timeout=5,
                 accept_installed_global_signature=True,
+            )
+
+        authorize.assert_called_once_with(data, "B077T_US_13", recovery=False)
+        engine.flash.assert_awaited_once()
+
+    async def test_execute_rejects_installed_remap_signature_with_other_authorization_gate(
+        self,
+    ):
+        for options in (
+            {"probe_vendor_model": True},
+            {"accept_factory_signature": True},
+            {"accept_installed_global_signature": True},
+        ):
+            with (
+                self.subTest(options=options),
+                patch.object(
+                    ota, "collect_preflight_on_client", AsyncMock()
+                ) as collect,
+                self.assertRaisesRegex(ota.ExecutePreflightError, "併用"),
+            ):
+                await ota.execute_on_client(
+                    object(),
+                    advertised_name="Cube Pocket Keyboard 1",
+                    image=approved_image(),
+                    data=b"approved-data",
+                    operation_timeout=5,
+                    accept_installed_remap_signature=True,
+                    installed_remap_fw_info=b"unused",
+                    **options,
+                )
+
+            collect.assert_not_awaited()
+
+    async def test_installed_remap_fallback_authorizes_global_with_global_model(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 1",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model=None,
+            current_ota_version="1.0.1",
+            current_ota_checksum=0xEC29,
+            target_image_kind="global",
+            target_full_file_sum16=0xEC27,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+            installed_remap_signature_matched=True,
+        )
+        engine = SimpleNamespace(flash=AsyncMock())
+        data = b"approved-data"
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            patch.object(
+                gatt_ota, "authorize_firmware", return_value=object()
+            ) as authorize,
+            patch.object(gatt_ota, "GattOtaEngine", return_value=engine),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 1",
+                image=approved_image(),
+                data=data,
+                operation_timeout=5,
+                accept_installed_remap_signature=True,
+                installed_remap_fw_info=b"unused-since-collect-is-mocked",
             )
 
         authorize.assert_called_once_with(data, "B077T_US_13", recovery=False)
@@ -914,6 +1229,78 @@ class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
             [(b"\x10\x00", True), (b"\x23\x00", True)],
         )
         self.assertTrue(report.installed_global_signature_matched)
+
+    async def test_installed_remap_signature_does_not_send_model_probe_commands(self):
+        script = normal_script()
+        script[-1] = GattStep("read", INSTALLED_REMAP_FW_INFO_FRAME)
+        client = self.make_client(script)
+
+        report = await ota.collect_preflight_on_client(
+            client,
+            advertised_name="Cube Pocket Keyboard 2",
+            image=approved_image(),
+            settle_seconds=0,
+            operation_timeout=0.01,
+            accept_installed_remap_signature=True,
+            installed_remap_fw_info=ota.resolve_installed_remap_fw_info(None),
+        )
+
+        client.assert_complete()
+        self.assertEqual(
+            client.writes,
+            [(b"\x10\x00", True), (b"\x23\x00", True)],
+        )
+        self.assertTrue(report.installed_remap_signature_matched)
+
+    async def test_execute_with_installed_remap_signature_flashes_fixed_global(self):
+        script = normal_script()
+        script[-1] = GattStep("read", INSTALLED_REMAP_FW_INFO_FRAME)
+        client = self.make_client(script)
+        engine = SimpleNamespace(flash=AsyncMock())
+        data = b"approved-data"
+
+        with (
+            patch.object(
+                gatt_ota, "authorize_firmware", return_value=object()
+            ) as authorize,
+            patch.object(
+                gatt_ota, "GattOtaEngine", return_value=engine
+            ) as engine_class,
+        ):
+            report = await ota.execute_on_client(
+                client,
+                advertised_name="Cube Pocket Keyboard 2",
+                image=approved_image(),
+                data=data,
+                operation_timeout=1,
+                accept_installed_remap_signature=True,
+                installed_remap_fw_info=ota.resolve_installed_remap_fw_info(None),
+            )
+
+        client.assert_complete()
+        self.assertTrue(report.installed_remap_signature_matched)
+        authorize.assert_called_once_with(data, "B077T_US_13", recovery=False)
+        engine_class.assert_called_once_with(client, operation_timeout=1)
+        engine.flash.assert_awaited_once()
+
+    async def test_execute_without_installed_remap_signature_flag_is_blocked(self):
+        script = normal_script()
+        script[-1] = GattStep("read", INSTALLED_REMAP_FW_INFO_FRAME)
+        client = self.make_client(script)
+
+        with (
+            patch.object(gatt_ota, "GattOtaEngine") as engine_class,
+            self.assertRaises(ota.ExecutePreflightError),
+        ):
+            await ota.execute_on_client(
+                client,
+                advertised_name="Cube Pocket Keyboard 2",
+                image=approved_image(),
+                data=b"approved-data",
+                operation_timeout=1,
+            )
+
+        engine_class.assert_not_called()
 
     async def test_timeout_stops_without_an_additional_write(self):
         script = normal_script()
