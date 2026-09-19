@@ -25,6 +25,8 @@ _STALE_PRN_OPCODES = frozenset({0x17})
 _AUTHORIZATION_TOKEN = object()
 _DEFAULT_CHUNK_PACING_SECONDS = 0.002
 _COREBLUETOOTH_CHUNK_PACING_SECONDS = 0.010
+_COREBLUETOOTH_WNR_INITIAL_POLL_SECONDS = 0.001
+_COREBLUETOOTH_WNR_MAX_POLL_SECONDS = 0.020
 
 
 class GattOtaError(RuntimeError):
@@ -294,6 +296,7 @@ class GattOtaEngine:
         wait_started: float | None = None
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._operation_timeout
+        poll_seconds = _COREBLUETOOTH_WNR_INITIAL_POLL_SECONDS
         try:
             while True:
                 if loop.time() >= deadline:
@@ -324,7 +327,10 @@ class GattOtaEngine:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise GattTimeoutError(f"{stage} WNR readiness timed out")
-                await asyncio.sleep(min(0.001, remaining))
+                await asyncio.sleep(min(poll_seconds, remaining))
+                poll_seconds = min(
+                    poll_seconds * 2, _COREBLUETOOTH_WNR_MAX_POLL_SECONDS
+                )
         finally:
             if wait_started is not None:
                 self.wnr_ready_wait_seconds += loop.time() - wait_started

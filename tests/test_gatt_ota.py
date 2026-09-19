@@ -504,6 +504,15 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
         self.assertNotIn(b"\x22\x00", writes)
 
+    async def test_corebluetooth_wnr_readiness_timeout_bounds_native_polling(self):
+        client = CoreBluetoothGattClient(ready=[False] * 100, reads=[])
+        engine = gatt_ota.GattOtaEngine(client, operation_timeout=0.02)
+
+        with self.assertRaises(gatt_ota.GattTimeoutError):
+            await engine._wait_for_wnr_ready("payload")
+
+        self.assertLessEqual(len(client.peripheral.events), 8)
+
     async def test_corebluetooth_wnr_readiness_exception_fails_closed(self):
         client = CoreBluetoothGattClient(
             ready=[RuntimeError("native readiness failed")],
