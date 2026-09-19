@@ -23,7 +23,11 @@ FWを送信しません。実行時は固定GLOBAL/JP_LANG imageのSHA-256を
 `--execute`ではscan後の**同一BLE接続**でGATT情報、`0x10`、`0x23`を再取得します。
 通常のwrite gateはadvertised name、`PAR2801`、`B077T` model、必須GATT構成、image hashが
 すべて通過した時だけ`GattOtaEngine`へ送信を委譲します。JP_LANGと設定生成imageは、
-`--probe-vendor-model`でその同一接続上から`B077T` modelを取得できた場合だけ許可します。
+`--probe-vendor-model`で同一接続上から`B077T` modelを取得できた場合に許可します。配布GLOBALを
+導入済みでmodel照会がタイムアウトする実機では、`--accept-installed-global-signature`を使用できます。
+この経路はadvertised name 1/2/3、`PAR2801`、revision `1.0.0`、必須GATT構成、`0x23` raw応答
+`0e 09 23 00 31 2e 30 2e 31 27 ec`を同一接続で完全一致させ、固定JP_LANGまたはGLOBAL原本と
+TOMLから完全再生成できる設定imageだけを許可します。GLOBALへの書込みには使用できません。
 
 工場出荷FWから固定GLOBALへの初回更新だけは、`--accept-factory-signature`で限定fallbackを
 明示できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision
@@ -32,11 +36,14 @@ FWを送信しません。実行時は固定GLOBAL/JP_LANG imageのSHA-256を
 `PAR2801`がすべて一致した場合だけです。`0x6162`単体はmodel識別に使いません。
 authorizationにはGLOBALに埋め込まれた`B077T_US_13`を渡しますが、report上のdevice-reported
 Vendor OTA modelは`unavailable`のままとし、factory signature一致を別fieldで表示します。
-このfallbackはJP_LANG、設定生成image、復旧には使えず、`--probe-vendor-model`とも併用できません。
+このfallbackはJP_LANG、設定生成imageには使えず、`--probe-vendor-model`とも併用できません。
+初回GLOBAL転送が中断した場合の`tools.macos_recover`では、同じ完全一致条件と固定GLOBAL原本に
+限って復旧authorizationに使用できます。
 明示SHA確認も通常どおり必須です。
 
 実施順は、factory signatureでGLOBALのみを書込み、再起動・再接続後に
-`--probe-vendor-model`で`B077T`を確認し、その後にJP_LANGを書き込む順です。
+installed GLOBAL signature（または取得できる場合は`B077T` model）を確認し、その後に
+JP_LANGを書き込む順です。
 CLIはこの連続手順を自動実行しません。CoreBluetooth UUIDは`--device-uuid`でscan対象を
 絞る用途だけであり、本人性の判定には使いません。
 
@@ -87,6 +94,8 @@ GATT engineは各論理ブロックをCoreBluetoothのWNR上限（host MTU - 3�
 分割します。deviceが各ATT writeをflash callbackへ渡すため、物理断片サイズはWNR上限と
 論理ブロック長の小さい方以下で最大の4-byte倍数にします。実測はSteam DeckでMTU 23／
 20 bytes、macOSでMTU 50／44 bytesです。算出サイズが4 bytes未満なら送信せず停止します。
+deviceが報告するmax object sizeまたは論理ブロック長自体が4-byte境界でなければ、
+object-createやpayload送信の前に停止します。
 raw payloadはWNRのみで送信し、各物理断片ごとにreadiness確認、dispatch counter更新、
 macOS/CoreBluetoothでは10ms pacing（その他backendは既定で2ms）を行います。物理断片サイズが論理ブロック長より小さい場合、OSの送信queueとdeviceの
 ACK timingがhostの中間PRN dispatch境界に一致しない可能性があるため、中間PRNでは待機せず、

@@ -148,7 +148,9 @@ class RecoveryExecutionTests(unittest.IsolatedAsyncioTestCase):
                 self.uuid = uuid
                 self.characteristics = characteristics
 
-        ff01 = Characteristic("ff01", ["read", "write"])
+        ff01 = Characteristic(
+            "ff01", ["read", "write", "write-without-response", "notify"]
+        )
         model = Characteristic("2a24", ["read"])
         services = [
             Service(

@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
+from typing import ClassVar
 
 from tools import ble_transport
 from tools import ota_protocol as protocol
@@ -161,6 +162,28 @@ class GattTests(unittest.TestCase):
         ]
 
         with self.assertRaisesRegex(ble_info.GattValidationError, "ff01"):
+            ble_info.inspect_gatt(services)
+
+    def test_rejects_ff01_when_any_ota_property_is_missing(self):
+        required = {"read", "write", "write-without-response", "notify"}
+
+        for missing in required:
+            with self.subTest(missing=missing):
+                services = make_services()
+                services[0].characteristics[0].properties = sorted(
+                    required - {missing}
+                )
+
+                with self.assertRaisesRegex(
+                    ble_info.GattValidationError, f"ff01.*{missing}"
+                ):
+                    ble_info.inspect_gatt(services)
+
+    def test_rejects_ff02_without_write_with_response(self):
+        services = make_services()
+        services[0].characteristics[1].properties = ["read", "write-without-response"]
+
+        with self.assertRaisesRegex(ble_info.GattValidationError, "ff02.*write"):
             ble_info.inspect_gatt(services)
 
 
@@ -367,7 +390,7 @@ class ClientFactoryTests(unittest.TestCase):
 class ScanTests(unittest.IsolatedAsyncioTestCase):
     async def test_scans_for_each_exact_allowlisted_device_name(self):
         class Scanner:
-            calls = []
+            calls: ClassVar[list[float]] = []
             candidate = None
 
             @classmethod

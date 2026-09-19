@@ -108,11 +108,15 @@ def inspect_gatt(services: Iterable[Any]) -> dict[str, CharacteristicInfo]:
             f"必須Characteristicが見つかりません: {', '.join(missing)}"
         )
 
-    ff01_properties = set(found["ff01"].properties)
-    if not {"read", "write"}.issubset(ff01_properties):
+    ff01_required = {"read", "write", "write-without-response", "notify"}
+    ff01_missing = sorted(ff01_required - set(found["ff01"].properties))
+    if ff01_missing:
         raise GattValidationError(
-            "ff01に必要なread/write-with-responseプロパティがありません: "
-            + ", ".join(found["ff01"].properties)
+            "ff01に必要なプロパティがありません: " + ", ".join(ff01_missing)
+        )
+    if "write" not in found["ff02"].properties:
+        raise GattValidationError(
+            "ff02に必要なwrite-with-responseプロパティがありません: write"
         )
     return found
 

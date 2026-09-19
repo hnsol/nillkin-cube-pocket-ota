@@ -73,7 +73,7 @@ python3 -m tools.macos_ota \
 WNR上限はそれぞれ20/47 bytesです。deviceのflash書込み境界に合わせ、物理断片は
 各WNR上限と論理ブロック長の小さい方以下で最大の4-byte倍数（20/44 bytes）にします。
 上限が4 bytes未満なら送信せず停止します。244-byte論理ブロックをこのサイズへ分割し、
-各断片でCoreBluetoothの送信可能状態と2ms pacingを確認します。PRN threshold 16は
+各断片でCoreBluetoothの送信可能状態と10ms pacingを確認します。PRN threshold 16は
 物理write 16回ではなく論理ブロック16個を表します。ただし物理分割時は、OSの送信queueと
 deviceのACK timingがhostの3904 bytes dispatch境界に一致しない可能性があるため、中間PRNでは
 待機せず4096-byte object末尾のchecksum ACKを採用します。一致しない早期ACKは記録して読み飛ばし、
@@ -82,7 +82,7 @@ deviceのACK timingがhostの3904 bytes dispatch境界に一致しない可能�
 finalization結果が不明なため`0x22` resetも再送も行いません。FWを再送せず、手動で電源を
 入れ直した後、通常のread-only preflightで現在のOTA version/checksumを確認してください。
 
-工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えません。
+工場出荷FWから固定GLOBAL原本を書き込む場合は、`--accept-factory-signature`で限定fallbackを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FWには使えません。初回GLOBAL転送が中断した場合の`tools.macos_recover`でも、同じ完全一致条件と固定GLOBAL原本に限って使用します。
 
 手順1: 工場出荷FWから固定GLOBALへ更新します。コマンドを示すだけで、自動実行はしません。
 

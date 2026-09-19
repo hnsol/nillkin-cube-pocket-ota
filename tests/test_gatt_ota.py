@@ -415,6 +415,38 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         ):
             engine._validate_payload_transport(state)
 
+    async def test_unaligned_device_transport_values_stop_before_object_create(self):
+        for field, max_object_size, mtu_size in (
+            ("max_object_size", 4095, 244),
+            ("mtu_size", 4096, 243),
+        ):
+            with self.subTest(field=field):
+                client = FakeGattClient(
+                    reads=[
+                        init_response(
+                            max_object_size=max_object_size,
+                            mtu_size=mtu_size,
+                            prn_threshold=1,
+                        )
+                    ]
+                )
+
+                with self.assertRaisesRegex(
+                    gatt_ota.GattProtocolError, f"{field}.*4-byte aligned"
+                ):
+                    await gatt_ota.GattOtaEngine(
+                        client,
+                        settle_seconds=0,
+                        operation_timeout=0.1,
+                        ack_timeout=0.1,
+                    ).flash(authorize(b"\x01\x02"))
+
+                writes = [event[2] for event in client.events if event[0] == "write"]
+                self.assertFalse(any(payload.startswith(b"\x25") for payload in writes))
+                self.assertNotIn(b"\x01\x02", writes)
+                self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
+                self.assertNotIn(b"\x22\x00", writes)
+
     async def test_corebluetooth_payload_waits_for_native_wnr_queue(self):
         client = CoreBluetoothGattClient(
             ready=[False, False, True],

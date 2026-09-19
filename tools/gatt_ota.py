@@ -494,6 +494,15 @@ class GattOtaEngine:
         return self.physical_fragment_size
 
     def _validate_payload_transport(self, state: pixart_ota.OtaState) -> int:
+        for field, value in (
+            ("max_object_size", state.max_object_size),
+            ("mtu_size", state.mtu_size),
+        ):
+            if value % 4 != 0:
+                raise GattProtocolError(
+                    f"device {field} must be 4-byte aligned; "
+                    + self._state_diagnostics(state)
+                )
         return self._validate_host_wnr_limit(state)
 
     def _chunk_diagnostics(
