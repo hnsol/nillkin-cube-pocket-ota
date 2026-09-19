@@ -357,7 +357,7 @@ def print_transfer_plan(image: firmware_image.ValidatedImage, data: bytes) -> No
     print("- 0x25 object ACK: notify待ち (device→host)")
     print("- raw payload send: 実機0x27応答で決定 (host→device; without response)")
     print("- 0x17 PRN ACK: notify待ち (device→host)")
-    print("- 0x18 upgrade send: version[10]=1.0.1 (host→device; with response)")
+    print("- 0x18 upgrade send: version[5]=1.0.1 (host→device; with response)")
     print("- 0x18 upgrade ACK: notify待ち (device→host)")
     print("- 0x22 reset send: 22 00 (host→device; without response)")
     print("Executable: --executeとSHA-256確認時のみ")

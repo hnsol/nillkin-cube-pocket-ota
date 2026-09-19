@@ -348,7 +348,7 @@ class ParserSafetyTests(unittest.TestCase):
         )
         self.assertIn("0x17 PRN ACK: notify待ち (device→host)", rendered)
         self.assertIn(
-            "0x18 upgrade send: version[10]=1.0.1 (host→device; with response)",
+            "0x18 upgrade send: version[5]=1.0.1 (host→device; with response)",
             rendered,
         )
         self.assertIn("0x18 upgrade ACK: notify待ち (device→host)", rendered)

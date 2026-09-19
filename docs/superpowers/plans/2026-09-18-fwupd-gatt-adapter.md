@@ -16,7 +16,7 @@
 - GLOBALとJP LANGの承認済みSHA-256以外を拒否する。
 - Windows OTAUtilityで確認したGATT wire formatを優先し、fwupdのHID report IDを混入しない。
 - integerはlittle-endian、checksumは全byteのsum16 mod 65536。
-- 不明なversion[10]、専用retransmit endpoint、notify semanticsは推測で実行可能にしない。
+- 不明なversion[5]、専用retransmit endpoint、notify semanticsは推測で実行可能にしない。
 
 ---
 
@@ -30,7 +30,7 @@
 - Produces: `OtaState`, `TransferOperation`, `build_init_new`, `parse_init_new_response`, `build_object_create`, `build_upgrade`, `build_reset`, `iter_transfer_operations`。
 
 - [ ] golden vector testを先に書き、未実装でREDを確認する。
-- [ ] Windows OTAUtility確認値を実装する: `28 00`, `10 00`, `27|size:u32|00`, `25|addr:u32|size:u32`, raw payload, `18|size:u32|sum16:u16|version[10]`, `22 00`。
+- [ ] Windows OTAUtility確認値を実装する: `28 00`, `10 00`, `27|size:u32|00`, `25|addr:u32|size:u32`, raw payload, `18|size:u32|sum16:u16|version[5]`, `22 00`。
 - [ ] 0x27 GATT response `0e 10 27` + 15-byte stateを厳密にparseし、status=0/new_flow=1/spec_result=1、max object/MTU/PRNの妥当性を検証する。
 - [ ] object最大4096、device MTU chunking、PRN/object末尾ACK位置、running sum16を再現する。
 - [ ] resume offset/checksum不一致はゼロから再開する計画にする。
@@ -50,7 +50,7 @@
 - [ ] CLI testを先に書きREDを確認する。
 - [ ] `--show-transfer-plan`時はファイル検証だけを行い、BLE import・scan・connectをしない。
 - [ ] state依存のMTU/PRN/resumeは「実機0x27応答で決定」と表示する。
-- [ ] version[10]とretransmit endpointが未確定である限り`Executable: no`と表示する。
+- [ ] version[5]とretransmit endpointが未確定である限り`Executable: no`と表示する。
 - [ ] 既存read-only CLIの挙動を維持し、全testを実行する。
 
 ### Task 3: GATT writer（実装のみ。実機実行は別承認）
@@ -61,7 +61,7 @@ OTAUtility ILから次を確認した。
 - `0x28` retransmit/reset-stateは`ff02`へwith-responseで送る。
 - `0x27`、`0x25`、raw payload、`0x18`、`0x22`は`ff01`を使う。
 - `0x27`/`0x25`/`0x18`はwith-response、payload/`0x22`はwithout-response。
-- upgradeのversion[10]は同梱`setting.ini`の`OTA_FW_VERSION=1.0.1`をASCII/NUL paddingした値。
+- upgradeのversion[5]は同梱`setting.ini`の`OTA_FW_VERSION=1.0.1`をASCII/NUL paddingした値。vendor `CmdToolSet.dll`の`Ota_cmd_fw_upgrade_t` が`ver`=SizeConst=5と定義することと照合済み。
 - object/PRN/upgrade ACKは`ff01` notifyで受ける。
 
 **Files:**

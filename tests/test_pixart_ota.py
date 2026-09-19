@@ -18,9 +18,15 @@ class CommandBuilderTests(unittest.TestCase):
         self.assertEqual(
             ota.build_upgrade(0x12345678, 0xABCD, "1.0"),
             bytes.fromhex(
-                "18 78 56 34 12 cd ab 31 2e 30 00 00 00 00 00 00 00"
+                "18 78 56 34 12 cd ab 31 2e 30 00 00"
             ),
         )
+        global_upgrade = ota.build_upgrade(123_916, 0xEC27, "1.0.1")
+        self.assertEqual(
+            global_upgrade,
+            bytes.fromhex("18 0c e4 01 00 27 ec 31 2e 30 2e 31"),
+        )
+        self.assertEqual(len(global_upgrade), 12)
         self.assertEqual(ota.build_reset(), bytes.fromhex("22 00"))
 
     def test_builders_reject_out_of_range_integers(self):
@@ -39,9 +45,15 @@ class CommandBuilderTests(unittest.TestCase):
                     builder(*arguments)
 
     def test_upgrade_rejects_non_ascii_or_oversized_version(self):
-        for version in ("日本語", "12345678901"):
+        for version in ("日本語", "123456"):
             with self.subTest(version=version), self.assertRaises(ota.ProtocolError):
                 ota.build_upgrade(1, 0, version)
+
+    def test_upgrade_accepts_exactly_five_ascii_version_bytes(self):
+        self.assertEqual(
+            ota.build_upgrade(1, 0, "12345"),
+            bytes.fromhex("18 01 00 00 00 00 00 31 32 33 34 35"),
+        )
 
 
 class InitNewResponseTests(unittest.TestCase):
@@ -151,9 +163,7 @@ class TransferPlanningTests(unittest.TestCase):
                 ),
                 ota.TransferOperation(
                     "upgrade",
-                    bytes.fromhex(
-                        "18 06 00 00 00 15 00 76 31 00 00 00 00 00 00 00 00"
-                    ),
+                    bytes.fromhex("18 06 00 00 00 15 00 76 31 00 00 00"),
                 ),
                 ota.TransferOperation("wait-upgrade", expected_opcode=0x18),
                 ota.TransferOperation("reset", bytes.fromhex("22 00")),

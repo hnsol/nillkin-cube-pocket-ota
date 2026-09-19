@@ -69,6 +69,9 @@ FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だ
 ただしobject size、deviceの論理ブロック長、PRN間隔、resume位置は実機の`0x27`応答で
 決まります。`GattOtaEngine`はその応答を検証してから送信します。`0x18` versionは
 OTAUtility設定から確認した`1.0.1`、retransmitは`ff02`の`0x28`を使います。
+`0x18`のversionは5-byte ASCII/NUL埋めです。vendor `CmdToolSet.dll`の
+`Ota_cmd_fw_upgrade_t`（Pack=1、`ver`はSizeConst=5）とGLOBALの12-byte frameに
+照合しています。
 `0x27`の`mtu_size=244`はBLEの物理MTUではなく、OTA上の論理payload block上限です。
 plannerは最大244 bytesの論理ブロックを生成し、PRN thresholdをその個数で数えます。
 PRN 16、object 4096 bytesでは論理上のACK境界は3904 bytes（244×16）後とobject末尾の

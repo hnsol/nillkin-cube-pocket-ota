@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 MAX_OBJECT_SIZE = 4096
+UPGRADE_VERSION_SIZE = 5
 
 
 class ProtocolError(ValueError):
@@ -67,12 +68,14 @@ def build_upgrade(fw_size: int, checksum: int, version: str) -> bytes:
         encoded_version = version.encode("ascii")
     except (AttributeError, UnicodeEncodeError) as exc:
         raise ProtocolError("version must be ASCII") from exc
-    if len(encoded_version) > 10:
-        raise ProtocolError("version must be at most 10 ASCII bytes")
+    if len(encoded_version) > UPGRADE_VERSION_SIZE:
+        raise ProtocolError(
+            f"version must be at most {UPGRADE_VERSION_SIZE} ASCII bytes"
+        )
     return (
         b"\x18"
         + struct.pack("<IH", fw_size, checksum)
-        + encoded_version.ljust(10, b"\x00")
+        + encoded_version.ljust(UPGRADE_VERSION_SIZE, b"\x00")
     )
 
 
