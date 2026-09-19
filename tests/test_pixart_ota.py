@@ -40,9 +40,10 @@ class CommandBuilderTests(unittest.TestCase):
             (ota.build_upgrade, (1, 0x1_0000, "1.0")),
         )
         for builder, arguments in cases:
-            with self.subTest(builder=builder.__name__, arguments=arguments):
-                with self.assertRaises(ota.ProtocolError):
-                    builder(*arguments)
+            with self.subTest(
+                builder=builder.__name__, arguments=arguments
+            ), self.assertRaises(ota.ProtocolError):
+                builder(*arguments)
 
     def test_upgrade_rejects_non_ascii_or_oversized_version(self):
         for version in ("日本語", "123456"):
@@ -313,17 +314,14 @@ class TransferPlanningTests(unittest.TestCase):
         }
         for field, values in invalid_values.items():
             for value in values:
-                with self.subTest(field=field, value=value):
-                    caught = None
-                    try:
-                        list(
-                            ota.iter_transfer_operations(
-                                b"\x01", self.state(**{field: value}), "v1"
-                            )
+                with self.subTest(
+                    field=field, value=value
+                ), self.assertRaises(ota.ProtocolError):
+                    list(
+                        ota.iter_transfer_operations(
+                            b"\x01", self.state(**{field: value}), "v1"
                         )
-                    except Exception as exc:
-                        caught = exc
-                    self.assertIsInstance(caught, ota.ProtocolError)
+                    )
 
     def test_plan_rejects_invalid_version_before_first_operation(self):
         operations = ota.iter_transfer_operations(b"\x01", self.state(), "日本語")

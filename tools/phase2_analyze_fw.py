@@ -1,13 +1,12 @@
-#!/usr/bin/env python3
 """Analyze Nillkin Cube Pocket firmware images without modifying them."""
 
 import argparse
-from dataclasses import dataclass
 import hashlib
-from pathlib import Path
 import re
 import struct
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 
 class FirmwareAnalysisError(RuntimeError):

@@ -5,7 +5,6 @@ import unittest
 from tools import ble_transport as ble
 from tools import ota_protocol as protocol
 
-
 FW_INFO_FRAME = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
 
 

@@ -1,8 +1,8 @@
+import io
 import struct
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-import io
 from pathlib import Path
 
 from tools import phase2_analyze_fw as fw

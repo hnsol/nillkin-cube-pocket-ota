@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 from tools import firmware_image as images
 
-
 GLOBAL_PATH = Path("firmware/original/B077T_US_13.bin")
 JP_LANG_PATH = Path("firmware/patched/B077T_US_13_JP_LANG.bin")
 GLOBAL_SHA = "00c87d252b639165963cc4452600672305043696d5fec7837b34b3dbed66957f"

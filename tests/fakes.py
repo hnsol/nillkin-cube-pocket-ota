@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 
 @dataclass(frozen=True)
@@ -72,7 +72,7 @@ class ScriptedGattClient:
         self.writes: list[tuple[bytes, bool]] = []
         self.is_connected = True
 
-    async def __aenter__(self) -> ScriptedGattClient:
+    async def __aenter__(self) -> Self:
         self.events.append(("connect", self.device))
         return self
 
