@@ -351,18 +351,26 @@ class GattOtaEngine:
         stage: str | None = None,
         minimum_payload_dispatch_counter: int | None = None,
         ignored_opcodes: frozenset[int] = frozenset(),
+        use_ack_timeout: bool = True,
     ) -> bytes:
         wait_stage = stage or f"ACK 0x{expected_opcode:02x}"
-        deadline = asyncio.get_running_loop().time() + self._ack_timeout
+        deadline = (
+            asyncio.get_running_loop().time() + self._ack_timeout
+            if use_ack_timeout
+            else None
+        )
         while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise GattTimeoutError(f"{wait_stage} timed out")
-            frame, payload_dispatch_counter = await self._bounded(
-                self._notifications.get(),
-                wait_stage,
-                remaining,
-            )
+            if deadline is None:
+                frame, payload_dispatch_counter = await self._notifications.get()
+            else:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise GattTimeoutError(f"{wait_stage} timed out")
+                frame, payload_dispatch_counter = await self._bounded(
+                    self._notifications.get(),
+                    wait_stage,
+                    remaining,
+                )
             if (
                 frame
                 and frame[0] in ignored_opcodes
@@ -581,7 +589,9 @@ class GattOtaEngine:
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-upgrade":
                 frame = await self._wait_notification(
-                    0x18, ignored_opcodes=_STALE_PRN_OPCODES
+                    0x18,
+                    ignored_opcodes=_STALE_PRN_OPCODES,
+                    use_ack_timeout=False,
                 )
                 if len(frame) == 4 and frame[1] != 0:
                     raise GattProtocolError("upgrade ACK reports failure")

@@ -231,6 +231,21 @@ class SlowPayloadGattClient(FakeGattClient):
         await super().write_gatt_char(characteristic, data, response=response)
 
 
+class DelayedUpgradeAckGattClient(FakeGattClient):
+    def __init__(self, *, upgrade: bytes, upgrade_ack: bytes, delay: float, **kwargs):
+        super().__init__(**kwargs)
+        self._upgrade = upgrade
+        self._upgrade_ack = upgrade_ack
+        self._delay = delay
+
+    async def write_gatt_char(self, characteristic, data, *, response):
+        await super().write_gatt_char(characteristic, data, response=response)
+        if response and bytes(data) == self._upgrade:
+            asyncio.get_running_loop().call_later(
+                self._delay, self._callback, characteristic, self._upgrade_ack
+            )
+
+
 class AckBeforeWriteReturnsGattClient(FakeGattClient):
     def __init__(self, *, final_payload: bytes, ack: bytes, **kwargs):
         super().__init__(**kwargs)
@@ -930,7 +945,9 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(b"\x01\x02", writes)
         self.assertNotIn(upgrade, writes)
 
-    async def test_stale_upgrade_ack_is_drained_before_upgrade_write(self):
+    async def test_stale_upgrade_ack_is_drained_before_upgrade_write_and_wait_is_cancelable(
+        self,
+    ):
         object_create = bytes.fromhex("25 00000000 04000000")
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = FakeGattClient(
@@ -944,13 +961,16 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with self.assertRaises(gatt_ota.GattTimeoutError):
-            await gatt_ota.GattOtaEngine(
-                client,
-                settle_seconds=0,
-                operation_timeout=0.1,
-                ack_timeout=0.01,
-            ).flash(authorize(b"\x01\x02"))
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                gatt_ota.GattOtaEngine(
+                    client,
+                    settle_seconds=0,
+                    operation_timeout=0.1,
+                    ack_timeout=0.01,
+                ).flash(authorize(b"\x01\x02")),
+                timeout=0.03,
+            )
 
         writes = [event[2] for event in client.events if event[0] == "write"]
         self.assertIn(upgrade, writes)
@@ -1017,7 +1037,33 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
-    async def test_only_stale_prn_acks_while_waiting_for_upgrade_times_out(self):
+    async def test_upgrade_wait_ignores_ack_timeout_until_delayed_success_ack(self):
+        firmware = b"\x01\x02"
+        upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
+        client = DelayedUpgradeAckGattClient(
+            upgrade=upgrade,
+            upgrade_ack=bytes.fromhex("18 0000"),
+            delay=0.02,
+            reads=[init_response(max_object_size=4, mtu_size=2, prn_threshold=1)],
+            notify_after_write={
+                bytes.fromhex("25 00000000 04000000"): [
+                    bytes.fromhex("25 000000")
+                ],
+                firmware: [bytes.fromhex("17 0300")],
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.01,
+        ).flash(authorize(firmware))
+
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_upgrade_wait_with_only_stale_prn_acks_is_cancelable_without_reset(self):
         firmware = b"\x01\x02"
         upgrade = bytes.fromhex("18 02000000 0300 312e302e310000000000")
         client = FakeGattClient(
@@ -1033,13 +1079,16 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with self.assertRaisesRegex(gatt_ota.GattTimeoutError, "ACK 0x18"):
-            await gatt_ota.GattOtaEngine(
-                client,
-                settle_seconds=0,
-                operation_timeout=0.1,
-                ack_timeout=0.01,
-            ).flash(authorize(firmware))
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                gatt_ota.GattOtaEngine(
+                    client,
+                    settle_seconds=0,
+                    operation_timeout=0.1,
+                    ack_timeout=0.01,
+                ).flash(authorize(firmware)),
+                timeout=0.03,
+            )
 
         writes = [event[2] for event in client.events if event[0] == "write"]
         self.assertNotIn(b"\x22\x00", writes)
