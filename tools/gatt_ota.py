@@ -607,7 +607,21 @@ class GattOtaEngine:
                     use_ack_timeout=False,
                 )
                 if len(frame) == 4 and frame[1] != 0:
-                    raise GattProtocolError("upgrade ACK reports failure")
+                    rejection = (
+                        "upgrade ACK reports failure: "
+                        f"status=0x{frame[1]:02X}, raw={frame.hex(' ')}"
+                    )
+                    try:
+                        rejection_state = await self._read_state(len(firmware))
+                    except GattOtaError as exc:
+                        raise GattProtocolError(
+                            f"{rejection}; post-rejection state query failed: {exc}"
+                        ) from exc
+                    self.last_state = rejection_state
+                    raise GattProtocolError(
+                        f"{rejection}; post-rejection state: "
+                        f"{self._state_diagnostics(rejection_state)}"
+                    )
                 if len(frame) not in (3, 4):
                     raise GattProtocolError("malformed upgrade ACK")
             elif operation.kind == "reset":

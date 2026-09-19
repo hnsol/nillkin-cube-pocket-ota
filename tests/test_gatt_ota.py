@@ -1431,6 +1431,55 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                     [e[2] for e in client.events if e[0] == "write"],
                 )
 
+    async def test_upgrade_rejection_reports_raw_status_and_post_rejection_state(self):
+        client = small_transfer_client(upgrade_ack=bytes.fromhex("18 ff a5 5a"))
+        client._reads.append(
+            init_response(
+                offset=1,
+                checksum=0x1234,
+                max_object_size=4096,
+                mtu_size=244,
+                prn_threshold=16,
+            )
+        )
+        engine = gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"upgrade ACK reports failure: status=0xFF, raw=18 ff a5 5a; "
+            r"post-rejection state: offset=1, checksum=0x1234, "
+            r"max_object_size=4096, mtu_size=244, prn_threshold=16",
+        ):
+            await engine.flash(authorize(b"\x01\x02"))
+
+        self.assertEqual(
+            (engine.last_state.offset, engine.last_state.checksum), (1, 0x1234)
+        )
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertEqual(writes.count(bytes.fromhex("27 02000000 00")), 2)
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_upgrade_rejection_is_preserved_when_state_query_fails(self):
+        client = small_transfer_client(upgrade_ack=bytes.fromhex("18 02 de ad"))
+        client._reads.append(b"invalid")
+        engine = gatt_ota.GattOtaEngine(
+            client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"upgrade ACK reports failure: status=0x02, raw=18 02 de ad; "
+            r"post-rejection state query failed: invalid init-new response",
+        ):
+            await engine.flash(authorize(b"\x01\x02"))
+
+        self.assertEqual((engine.last_state.offset, engine.last_state.checksum), (0, 0))
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertEqual(writes.count(bytes.fromhex("27 02000000 00")), 2)
+        self.assertNotIn(b"\x22\x00", writes)
+
     async def test_unexpected_object_ack_while_waiting_for_upgrade_reports_raw(self):
         client = small_transfer_client(upgrade_ack=bytes.fromhex("25 deadbe"))
 
