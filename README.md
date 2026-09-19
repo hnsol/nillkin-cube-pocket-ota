@@ -72,8 +72,10 @@ python3 -m tools.macos_ota \
 実測したhost MTUはSteam Deckで23、macOSで50であり、ATT header 3 bytesを除く
 物理断片はそれぞれ最大20/47 bytesです。244-byte論理ブロックをこの上限以下へ分割し、
 各断片でCoreBluetoothの送信可能状態と2ms pacingを確認します。PRN threshold 16は
-物理write 16回ではなく論理ブロック16個を表すため、4096-byte objectのACK境界は
-3904 bytes（244×16）とobject末尾4096 bytesです。
+物理write 16回ではなく論理ブロック16個を表します。ただし物理分割時は、OSの送信queueと
+deviceのACK timingがhostの3904 bytes dispatch境界に一致しない可能性があるため、中間PRNでは
+待機せず4096-byte object末尾のchecksum ACKを採用します。一致しない早期ACKは記録して読み飛ばし、
+末尾checksumと一致するACKがtimeoutまでに来なければupgrade/resetせず停止します。
 
 工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えず、`--probe-vendor-model`とも併用できません。
 

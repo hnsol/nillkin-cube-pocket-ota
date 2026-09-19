@@ -29,6 +29,7 @@ class TransferOperation:
     payload: bytes = b""
     expected_opcode: int | None = None
     expected_checksum: int | None = None
+    object_end: bool = False
 
 
 def _require_uint(value: int, bits: int, name: str) -> None:
@@ -181,6 +182,7 @@ def iter_transfer_operations(
                     "wait-prn",
                     expected_opcode=0x17,
                     expected_checksum=running_checksum,
+                    object_end=object_ended,
                 )
                 logical_blocks_since_ack = 0
 

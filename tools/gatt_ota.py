@@ -373,6 +373,60 @@ class GattOtaEngine:
                 continue
             return frame
 
+    @staticmethod
+    def _checksum_from_ack(frame: bytes, stage: str) -> int:
+        if len(frame) == 3:
+            return int.from_bytes(frame[1:3], "little")
+        if len(frame) == 4:
+            return int.from_bytes(frame[2:4], "little")
+        raise GattProtocolError(f"malformed checksum ACK during {stage}")
+
+    async def _wait_matching_checksum_notification(
+        self,
+        expected_checksum: int,
+        *,
+        stage: str,
+        minimum_payload_dispatch_counter: int,
+    ) -> bytes:
+        deadline = asyncio.get_running_loop().time() + self._ack_timeout
+        last_mismatch: tuple[int, bytes] | None = None
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                detail = ""
+                if last_mismatch is not None:
+                    received, frame = last_mismatch
+                    detail = (
+                        "; last checksum mismatch: "
+                        f"expected=0x{expected_checksum:04X}, "
+                        f"received=0x{received:04X}, raw={frame.hex(' ')}"
+                    )
+                raise GattTimeoutError(f"ACK 0x17 timed out{detail}")
+            try:
+                frame, payload_dispatch_counter = await self._bounded(
+                    self._notifications.get(),
+                    "ACK 0x17",
+                    remaining,
+                )
+            except GattTimeoutError as exc:
+                if last_mismatch is None:
+                    raise
+                received, frame = last_mismatch
+                raise GattTimeoutError(
+                    "ACK 0x17 timed out; last checksum mismatch: "
+                    f"expected=0x{expected_checksum:04X}, "
+                    f"received=0x{received:04X}, raw={frame.hex(' ')}"
+                ) from exc
+            if not frame or frame[0] != 0x17:
+                raise GattProtocolError(f"unexpected ACK during {stage}")
+            checksum = self._checksum_from_ack(frame, stage)
+            if checksum != expected_checksum:
+                last_mismatch = (checksum, frame)
+                continue
+            if payload_dispatch_counter < minimum_payload_dispatch_counter:
+                continue
+            return frame
+
     def _drain_notifications(self) -> None:
         while True:
             try:
@@ -470,6 +524,9 @@ class GattOtaEngine:
                         ),
                     )
             elif operation.kind == "wait-prn":
+                fragmented = self.physical_fragment_size < state.mtu_size
+                if fragmented and not operation.object_end:
+                    continue
                 ack_stage = self._chunk_diagnostics(
                     state,
                     object_index,
@@ -478,20 +535,24 @@ class GattOtaEngine:
                     "expected ACK 0x17",
                 )
                 try:
-                    frame = await self._wait_notification(
-                        0x17,
-                        minimum_payload_dispatch_counter=(
-                            self._payload_dispatch_counter
-                        ),
-                    )
+                    if fragmented:
+                        frame = await self._wait_matching_checksum_notification(
+                            operation.expected_checksum,
+                            stage=ack_stage,
+                            minimum_payload_dispatch_counter=(
+                                self._payload_dispatch_counter
+                            ),
+                        )
+                    else:
+                        frame = await self._wait_notification(
+                            0x17,
+                            minimum_payload_dispatch_counter=(
+                                self._payload_dispatch_counter
+                            ),
+                        )
                 except GattOtaError as exc:
                     self._raise_with_context(exc, ack_stage)
-                if len(frame) == 3:
-                    checksum = int.from_bytes(frame[1:3], "little")
-                elif len(frame) == 4:
-                    checksum = int.from_bytes(frame[2:4], "little")
-                else:
-                    raise GattProtocolError(f"malformed checksum ACK during {ack_stage}")
+                checksum = self._checksum_from_ack(frame, ack_stage)
                 if checksum != operation.expected_checksum:
                     raise GattProtocolError(
                         "running checksum ACK does not match: "

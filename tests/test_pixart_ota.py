@@ -132,7 +132,10 @@ class TransferPlanningTests(unittest.TestCase):
                 ota.TransferOperation("payload", b"\x01\x02\x03"),
                 ota.TransferOperation("payload", b"\x04"),
                 ota.TransferOperation(
-                    "wait-prn", expected_opcode=0x17, expected_checksum=10
+                    "wait-prn",
+                    expected_opcode=0x17,
+                    expected_checksum=10,
+                    object_end=True,
                 ),
                 ota.TransferOperation(
                     "object-create",
@@ -141,7 +144,10 @@ class TransferPlanningTests(unittest.TestCase):
                 ota.TransferOperation("wait-object", expected_opcode=0x25),
                 ota.TransferOperation("payload", b"\x05\x06"),
                 ota.TransferOperation(
-                    "wait-prn", expected_opcode=0x17, expected_checksum=21
+                    "wait-prn",
+                    expected_opcode=0x17,
+                    expected_checksum=21,
+                    object_end=True,
                 ),
                 ota.TransferOperation(
                     "upgrade",
@@ -170,9 +176,16 @@ class TransferPlanningTests(unittest.TestCase):
                     "wait-prn", expected_opcode=0x17, expected_checksum=21
                 ),
                 ota.TransferOperation(
-                    "wait-prn", expected_opcode=0x17, expected_checksum=36
+                    "wait-prn",
+                    expected_opcode=0x17,
+                    expected_checksum=36,
+                    object_end=True,
                 ),
             ],
+        )
+        self.assertEqual(
+            [operation.object_end for operation in waits],
+            [False, True],
         )
 
     def test_plan_counts_device_logical_blocks_for_prn_windows(self):

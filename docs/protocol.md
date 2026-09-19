@@ -59,10 +59,9 @@ BleakのCoreBluetooth without-response writeはnative送信queueへの投入後�
 queueの空きを保証しません。そのため各raw payloadとresetのwrite直前に
 `canSendWriteWithoutResponse`を約1ms間隔、operation timeout内でpollし、trueの時だけ送信します。
 APIの例外、不正値、待機中の切断、timeoutはfail-closedです。OTAUtilityに合わせ、raw payloadは
-各物理write後に2ms待機します。`0x17` ACKはPRN threshold数の
-論理ブロック送信後、またはobject末尾（firmware末尾を含む）で待ち、すべてのboundaryでrunning
-sum16との一致を厳密に検証します。3 bytes ACKのchecksumはbytes 1..2、4 bytes ACKでは
-bytes 2..3のlittle-endianです。
+各物理write後に2ms待機します。plannerは`0x17` ACKをPRN threshold数の
+論理ブロック送信後、またはobject末尾（firmware末尾を含む）に配置します。3 bytes ACKの
+checksumはbytes 1..2、4 bytes ACKではbytes 2..3のlittle-endianです。
 FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だけを検査します。
 そのため実装も残りのopaque bytesを解釈しません。各object-createは、最終objectでも
 `0x27`で得たmax object size（配布FWは4096を広告）を宣言し、実際に送るpayloadだけを
@@ -72,15 +71,19 @@ FWは`0x25` ACKを4 bytesで通知しますが、OTAUtilityは先頭の`0x25`だ
 OTAUtility設定から確認した`1.0.1`、retransmitは`ff02`の`0x28`を使います。
 `0x27`の`mtu_size=244`はBLEの物理MTUではなく、OTA上の論理payload block上限です。
 plannerは最大244 bytesの論理ブロックを生成し、PRN thresholdをその個数で数えます。
-PRN 16、object 4096 bytesでは最初のACKを3904 bytes（244×16）後、次をobject末尾の
-4096 bytes後に待ちます。running sum16もこの2境界に一致させます。
+PRN 16、object 4096 bytesでは論理上のACK境界は3904 bytes（244×16）後とobject末尾の
+4096 bytes後です。running sum16もこの2境界に一致させます。
 
 GATT engineは各論理ブロックをCoreBluetoothのWNR上限（host MTU - 3）以下の物理断片へ
 分割します。実測はSteam DeckでMTU 23／最大20 bytes、macOSでMTU 50／最大47 bytesです。
 raw payloadはWNRのみで送信し、各物理断片ごとにreadiness確認、dispatch counter更新、
-2ms pacingを行います。PRN windowの先頭でだけ古いnotifyを破棄し、window内の断片間では
-破棄しません。payload dispatch順も通知に記録し、boundaryより前のwriteに対応する早期`0x17`はchecksumが
-一致しても採用しません。host上限を取得できない場合や不正な場合はobject-create前に停止します。
+2ms pacingを行います。物理断片サイズが論理ブロック長より小さい場合、OSの送信queueとdeviceの
+ACK timingがhostの中間PRN dispatch境界に一致しない可能性があるため、中間PRNでは待機せず、
+object末尾でrunning sum16に一致する`0x17`を待ちます。有効な形式でもchecksumが一致しない早期ACKは
+記録して読み飛ばし、timeout時の診断に最後の不一致を含めます。別opcodeまたは不正形式は即時停止し、
+一致ACKが得られなければupgrade/resetしません。物理分割しない場合は従来どおり各PRN境界で待機します。
+payload dispatch順も通知に記録し、boundaryより前のwriteに対応する一致ACKは採用しません。
+host上限を取得できない場合や不正な場合はobject-create前に停止します。
 診断用に`0x27`のoffset/checksum/max object size/論理ブロック長/PRN threshold、host WNR上限、
 物理断片サイズをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
 object/論理payload位置・長さとWNR readinessのfalse観測回数・累積待機時間を含めます。

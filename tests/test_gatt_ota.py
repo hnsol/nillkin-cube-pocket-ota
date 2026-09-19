@@ -247,6 +247,25 @@ class AckBeforeWriteReturnsGattClient(FakeGattClient):
         await super().write_gatt_char(characteristic, data, response=response)
 
 
+class ObjectEndChecksumGattClient(FakeGattClient):
+    def __init__(self, *, final_ack: bytes | None, **kwargs):
+        super().__init__(**kwargs)
+        self._final_ack = final_ack
+        self._payload_bytes_dispatched = 0
+        self._early_ack_sent = False
+
+    async def write_gatt_char(self, characteristic, data, *, response):
+        await super().write_gatt_char(characteristic, data, response=response)
+        if response or bytes(data) == b"\x22\x00":
+            return
+        self._payload_bytes_dispatched += len(data)
+        if not self._early_ack_sent and self._payload_bytes_dispatched >= 3313:
+            self._early_ack_sent = True
+            self._callback(characteristic, bytes.fromhex("17 00 5c 3d"))
+        if self._payload_bytes_dispatched == 4096 and self._final_ack is not None:
+            self._callback(characteristic, self._final_ack)
+
+
 class FirstStartBlockingGattClient(FakeGattClient):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -604,6 +623,115 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             3904,
         )
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_fragmented_transfer_uses_matching_object_end_checksum_ack(self):
+        firmware = (
+            b"\xff" * 61
+            + b"\x99"
+            + b"\x00" * (3313 - 62)
+            + b"\xff" * 243
+            + b"\x0b"
+            + b"\x00" * (4096 - 3313 - 244)
+        )
+        upgrade = gatt_ota.pixart_ota.build_upgrade(
+            len(firmware), 0x2F74, gatt_ota.OTA_VERSION
+        )
+        client = ObjectEndChecksumGattClient(
+            final_ack=bytes.fromhex("17 00 74 2f"),
+            reads=[init_response(max_object_size=4096, mtu_size=244, prn_threshold=16)],
+            mtu_size=50,
+            notify_after_write={
+                bytes.fromhex("25 00000000 00100000"): [bytes.fromhex("25 000000")],
+                upgrade: [bytes.fromhex("18 0000")],
+            },
+        )
+
+        await gatt_ota.GattOtaEngine(
+            client,
+            settle_seconds=0,
+            chunk_pacing_seconds=0,
+            operation_timeout=0.1,
+            ack_timeout=0.05,
+        ).flash(authorize(firmware))
+
+        payload_writes = [
+            event[2]
+            for event in client.events
+            if event[0] == "write"
+            and event[3] is False
+            and event[2] != b"\x22\x00"
+        ]
+        self.assertEqual(b"".join(payload_writes), firmware)
+        self.assertIn(("write", "ff01", upgrade, True), client.events)
+        self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
+
+    async def test_fragmented_object_end_timeout_reports_last_checksum_mismatch(self):
+        firmware = (
+            b"\xff" * 61
+            + b"\x99"
+            + b"\x00" * (3313 - 62)
+            + b"\xff" * 243
+            + b"\x0b"
+            + b"\x00" * (4096 - 3313 - 244)
+        )
+        upgrade = gatt_ota.pixart_ota.build_upgrade(
+            len(firmware), 0x2F74, gatt_ota.OTA_VERSION
+        )
+        client = ObjectEndChecksumGattClient(
+            final_ack=None,
+            reads=[init_response(max_object_size=4096, mtu_size=244, prn_threshold=16)],
+            mtu_size=50,
+            notify_after_write={
+                bytes.fromhex("25 00000000 00100000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattTimeoutError,
+            r"expected=0x2F74, received=0x3D5C, raw=17 00 5c 3d",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(firmware))
+
+        payload_writes = [
+            event[2]
+            for event in client.events
+            if event[0] == "write"
+            and event[3] is False
+            and event[2] != b"\x22\x00"
+        ]
+        self.assertEqual(b"".join(payload_writes), firmware)
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertNotIn(upgrade, writes)
+        self.assertNotIn(b"\x22\x00", writes)
+
+    async def test_unfragmented_transfer_still_waits_at_intermediate_prn_boundary(self):
+        firmware = b"\x01\x02\x03\x04\x05\x06"
+        client = FakeGattClient(
+            reads=[init_response(max_object_size=6, mtu_size=2, prn_threshold=2)],
+            mtu_size=5,
+            notify_after_write={
+                bytes.fromhex("25 00000000 06000000"): [bytes.fromhex("25 000000")]
+            },
+        )
+
+        with self.assertRaises(gatt_ota.GattTimeoutError):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                chunk_pacing_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.01,
+            ).flash(authorize(firmware))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertIn(b"\x03\x04", writes)
+        self.assertNotIn(b"\x05\x06", writes)
 
     async def test_invalid_or_missing_host_mtu_fails_closed_before_object(self):
         for host_mtu in (None, True, 3, "247"):
