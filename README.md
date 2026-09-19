@@ -2,6 +2,9 @@
 
 macOSでNillkin Cube Pocketのfirmwareを検証・生成・OTA送信する実験的ツールです。
 
+半年後の再利用、追加リマップ、エラー時の判断には
+[運用・保守ノート](docs/maintenance.md)を参照してください。
+
 ## セットアップ
 
 Python 3.14.4でvenvを作成します。
@@ -120,7 +123,8 @@ python3 -m tools.macos_ota \
   --confirm-sha256 <生成時に表示されたSHA-256>
 ```
 
-GLOBAL復旧は、固定GLOBAL原本だけを許す別CLIです。
+工場出荷FWからGLOBALへの初回転送が中断した場合の復旧は、固定GLOBAL原本だけを
+許す別CLIです。正常起動中のJP_LANGからGLOBALへ戻す一般的なdowngrade機能ではありません。
 
 中断後の保持状態は、FWを書き込まずに`0x27`状態照会だけで確認できます。
 
@@ -134,7 +138,7 @@ python3 -m tools.macos_recover \
 同じprefixと一致するかを示します。このモードは`0x28`、FWデータ、`0x18`、
 `0x22`を送信しません。
 
-復旧を実行する場合はvendor new-flowどおり、`ff02`へ`0x28`を送信してから
+初回GLOBAL転送の復旧を実行する場合はvendor new-flowどおり、`ff02`へ`0x28`を送信してから
 `ff01`へ`0x27`を送信します。`0x28`は状態消去ではなく、deviceを永続化済みcheckpointへ
 巻き戻す操作です。返されたoffsetまでのGLOBAL prefix checksumが一致する場合だけ、
 そのobjectから残りを転送します。offset 0も同じ判定に含まれます。不一致ならpayload、
