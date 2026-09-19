@@ -1562,6 +1562,17 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
 
 class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
+    async def test_flash_reports_state_when_retransmit_does_not_clear_resume(self):
+        client = FakeGattClient(reads=[init_response(offset=1, checksum=10)])
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"retransmit did not clear resume state; offset=1, checksum=0x000A",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
+            ).flash(authorize(bytes(range(1, 7))))
+
     async def test_raw_or_wrong_mode_firmware_is_rejected_before_ble(self):
         for firmware in (b"raw", authorize(b"jp", recovery=False)):
             with self.subTest(firmware=firmware):
@@ -1645,7 +1656,11 @@ class RecoveryTransferTests(unittest.IsolatedAsyncioTestCase):
             client, settle_seconds=0, operation_timeout=0.1, ack_timeout=0.1
         )
 
-        with self.assertRaisesRegex(gatt_ota.GattProtocolError, "zero"):
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"retransmit did not establish zero recovery state; "
+            r"offset=1, checksum=0x000A",
+        ):
             await engine.recover(authorize(firmware, recovery=True))
 
         writes = [event[2] for event in client.events if event[0] == "write"]

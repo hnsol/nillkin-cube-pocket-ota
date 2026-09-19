@@ -32,6 +32,7 @@ async def recover_on_client(
     image: firmware_image.ValidatedImage,
     data: bytes,
     operation_timeout: float,
+    accept_factory_signature: bool = False,
 ) -> macos_ota.PreflightReport:
     """Recover on a fresh, same-session read-only probe."""
     if image.profile.kind is not firmware_image.ImageKind.GLOBAL:
@@ -41,13 +42,24 @@ async def recover_on_client(
         advertised_name=advertised_name,
         image=image,
         operation_timeout=operation_timeout,
+        accept_factory_signature=accept_factory_signature,
     )
-    if not report.ready_for_future_flash or report.vendor_ota_model is None:
+    if not report.ready_for_future_flash:
         raise RecoveryPreflightError(
             "recovery preflight gateを満たしません: " + "; ".join(report.blockers)
         )
+    authorization_model = report.vendor_ota_model
+    if authorization_model is None:
+        global_profile = firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL]
+        if not (
+            accept_factory_signature
+            and report.factory_signature_matched
+            and image.profile == global_profile
+        ):
+            raise RecoveryPreflightError("Vendor OTA model B077Tを確認できません")
+        authorization_model = global_profile.embedded_version.decode("ascii")
     authorized = gatt_ota.authorize_firmware(
-        data, report.vendor_ota_model, recovery=True
+        data, authorization_model, recovery=True
     )
     await gatt_ota.GattOtaEngine(client, operation_timeout=operation_timeout).recover(
         authorized
@@ -65,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scan-timeout", type=float, default=15.0)
     parser.add_argument("--connect-timeout", type=float, default=10.0)
     parser.add_argument("--operation-timeout", type=float, default=5.0)
+    parser.add_argument(
+        "--accept-factory-signature",
+        action="store_true",
+        help="確認済みの工場出荷signatureに限りGLOBAL復旧を許可する",
+    )
     parser.add_argument(
         "--device-uuid",
         help="CoreBluetooth UUIDでscan対象を絞る（本人性の判定には使わない）",
@@ -92,6 +109,7 @@ async def _run(
             image=image,
             data=data,
             operation_timeout=args.operation_timeout,
+            accept_factory_signature=args.accept_factory_signature,
         )
 
 

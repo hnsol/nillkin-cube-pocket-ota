@@ -127,6 +127,7 @@ GLOBAL復旧は、固定GLOBAL原本だけを許す別CLIです。
 python3 -m tools.macos_recover \
   --firmware firmware/original/B077T_US_13.bin \
   --execute \
+  --accept-factory-signature \
   --confirm-sha256 00c87d252b639165963cc4452600672305043696d5fec7837b34b3dbed66957f
 ```
 

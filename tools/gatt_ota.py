@@ -656,7 +656,10 @@ class GattOtaEngine:
             self.last_state = state
             self._validate_payload_transport(state)
             if state.offset != 0 or state.checksum != 0:
-                raise GattProtocolError("retransmit did not clear resume state")
+                raise GattProtocolError(
+                    "retransmit did not clear resume state; "
+                    + self._state_diagnostics(state)
+                )
             await self._run_transfer(data, state)
             primary_failed = False
             return state
@@ -684,7 +687,8 @@ class GattOtaEngine:
                 self._validate_payload_transport(state)
                 if state.offset != 0 or state.checksum != 0:
                     raise GattProtocolError(
-                        "retransmit did not establish zero recovery state"
+                        "retransmit did not establish zero recovery state; "
+                        + self._state_diagnostics(state)
                     )
             await self._run_transfer(data, state)
             primary_failed = False
