@@ -79,7 +79,7 @@ deviceのACK timingがhostの3904 bytes dispatch境界に一致しない可能�
 待機せず4096-byte object末尾のchecksum ACKを採用します。一致しない早期ACKは記録して読み飛ばし、
 末尾checksumと一致するACKがtimeoutまでに来なければupgrade/resetせず停止します。
 
-工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えず、`--probe-vendor-model`とも併用できません。
+工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えません。
 
 手順1: 工場出荷FWから固定GLOBALへ更新します。コマンドを示すだけで、自動実行はしません。
 
@@ -91,15 +91,9 @@ python3 -m tools.macos_ota \
   --confirm-sha256 00c87d252b639165963cc4452600672305043696d5fec7837b34b3dbed66957f
 ```
 
-再起動後に再接続し、手順2としてGLOBAL FWから`B077T` modelを同一接続で取得できることをread-onlyで確認します。
+GLOBAL導入後は`0x2A`がタイムアウトするため、`--accept-installed-global-signature`で`0x2A`/`0x2B`を送らずにJP_LANGへ進めます。同一接続でadvertised name `Cube Pocket Keyboard 1`/`2`/`3`のいずれか、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 2e 31 27 ec`がすべて完全一致した場合だけです。対象は固定JP_LANG、またはGLOBAL原本とTOMLから完全再生成できる設定FWに限ります。GLOBALには使えず、`--probe-vendor-model`、`--accept-factory-signature`とも併用できません。
 
-```sh
-python3 -m tools.macos_ota \
-  --firmware firmware/original/B077T_US_13.bin \
-  --probe-vendor-model
-```
-
-`Vendor OTA model: B077T_US_13`が確認できた後だけ、手順3としてJP_LANGを書き込みます。
+手順2としてJP_LANGを書き込みます。
 
 固定JP LANG版の例です。
 
@@ -107,7 +101,7 @@ python3 -m tools.macos_ota \
 python3 -m tools.macos_ota \
   --firmware firmware/patched/B077T_US_13_JP_LANG.bin \
   --execute \
-  --probe-vendor-model \
+  --accept-installed-global-signature \
   --confirm-sha256 3c096e6498332d677cb0e4a0c541e6630f8955b0a21e97388b776674883f5246
 ```
 
@@ -119,7 +113,7 @@ python3 -m tools.macos_ota \
   --base-firmware firmware/original/B077T_US_13.bin \
   --remap-config configs/my-layout.toml \
   --execute \
-  --probe-vendor-model \
+  --accept-installed-global-signature \
   --confirm-sha256 <生成時に表示されたSHA-256>
 ```
 
@@ -153,7 +147,7 @@ python3 -m tools.macos_recover \
 
 ## 安全性と制限
 
-- macOS OTA書込みとGLOBAL復旧CLIは実装済みですが、実機での正常書込み・復旧は未検証です。
+- GLOBAL復旧書込みは実機で完了確認済みです（再起動後`1.0.1` / `0xEC27`）。再起動切断時のnotify cleanupも正常終了扱いに修正済みです。JP_LANG書込みは未検証です。
 - OTA中断や完全brick後にBLE広告が出ない場合、このツールだけでは復旧できません。
 - vendor提供のfirmwareおよびtoolは再配布しません。
 - 実機へ書込む前に、まずGLOBALへの書込みと復旧を検証してください。必要なら`--device-uuid`はscan対象の絞込みにだけ使えます。

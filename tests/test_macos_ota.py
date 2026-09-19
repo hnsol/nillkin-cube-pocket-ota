@@ -22,6 +22,9 @@ from tools import (
 from tools import macos_ota as ota
 
 FW_INFO_FRAME = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
+INSTALLED_GLOBAL_FW_INFO_FRAME = bytes.fromhex(
+    "0e 09 23 00 31 2e 30 2e 31 27 ec"
+)
 MODEL_INFO_FRAME = bytes.fromhex(
     "0e 17 2b 00 00 00 42 30 37 37 54 5f 55 53 5f 31 33 00 00 00 00 00 00 00 00"
 )
@@ -31,6 +34,13 @@ EXPECTED_SERVICES = ("ff00", "ff01", "ff02", "ff03")
 def approved_image() -> firmware_image.ValidatedImage:
     return firmware_image.ValidatedImage(
         profile=firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL],
+        keymap=tuple(range(130)),
+    )
+
+
+def approved_jp_image() -> firmware_image.ValidatedImage:
+    return firmware_image.ValidatedImage(
+        profile=firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.JP_LANG],
         keymap=tuple(range(130)),
     )
 
@@ -48,6 +58,10 @@ def expected_identity(**changes) -> ble_transport.GattIdentity:
 
 def current_firmware() -> ota_protocol.OtaFirmwareInfo:
     return ota_protocol.parse_firmware_info(FW_INFO_FRAME)
+
+
+def installed_global_firmware() -> ota_protocol.OtaFirmwareInfo:
+    return ota_protocol.parse_firmware_info(INSTALLED_GLOBAL_FW_INFO_FRAME)
 
 
 def normal_script() -> list[GattStep]:
@@ -203,6 +217,70 @@ class PreflightEvaluationTests(unittest.TestCase):
                 self.assertFalse(report.ready_for_future_flash)
                 self.assertFalse(report.factory_signature_matched)
 
+    def test_installed_global_signature_accepts_every_allowlisted_slot_for_jp_lang(self):
+        for name in phase1_ble_info.TARGET_NAMES:
+            with self.subTest(name=name):
+                report = ota.evaluate_preflight(
+                    expected_identity(advertised_name=name),
+                    ota_protocol.ModelIdentity.UNAVAILABLE,
+                    installed_global_firmware(),
+                    approved_jp_image(),
+                    accept_installed_global_signature=True,
+                )
+
+                self.assertTrue(report.ready_for_future_flash)
+                self.assertTrue(report.installed_global_signature_matched)
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            ota.print_report(report)
+        self.assertIn("Installed GLOBAL signature: matched", output.getvalue())
+
+    def test_installed_global_signature_requires_every_fingerprint_component(self):
+        cases = (
+            expected_identity(advertised_name="other"),
+            expected_identity(gatt_model="PAR9999"),
+            expected_identity(gatt_revision="1.0.1"),
+            expected_identity(service_uuids=("ff00", "ff01", "ff02")),
+        )
+        for identity in cases:
+            with self.subTest(identity=identity):
+                report = ota.evaluate_preflight(
+                    identity,
+                    ota_protocol.ModelIdentity.UNAVAILABLE,
+                    installed_global_firmware(),
+                    approved_jp_image(),
+                    accept_installed_global_signature=True,
+                )
+                self.assertFalse(report.installed_global_signature_matched)
+                self.assertFalse(report.ready_for_future_flash)
+
+        report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            ota_protocol.OtaFirmwareInfo(
+                version="1.0.1",
+                checksum=0xEC27,
+                raw=INSTALLED_GLOBAL_FW_INFO_FRAME[:-1] + b"\x26",
+            ),
+            approved_jp_image(),
+            accept_installed_global_signature=True,
+        )
+        self.assertFalse(report.installed_global_signature_matched)
+        self.assertFalse(report.ready_for_future_flash)
+
+    def test_installed_global_signature_rejects_global_target(self):
+        report = ota.evaluate_preflight(
+            expected_identity(),
+            ota_protocol.ModelIdentity.UNAVAILABLE,
+            installed_global_firmware(),
+            approved_image(),
+            accept_installed_global_signature=True,
+        )
+
+        self.assertFalse(report.installed_global_signature_matched)
+        self.assertFalse(report.ready_for_future_flash)
+
 
 class ParserSafetyTests(unittest.TestCase):
     def test_cli_accepts_factory_signature_and_vendor_probe_flags(self):
@@ -215,6 +293,42 @@ class ParserSafetyTests(unittest.TestCase):
 
         self.assertTrue(factory.accept_factory_signature)
         self.assertTrue(probe.probe_vendor_model)
+
+        installed = ota.build_parser().parse_args(
+            ["--firmware", "fw.bin", "--accept-installed-global-signature"]
+        )
+        self.assertTrue(installed.accept_installed_global_signature)
+
+    def test_cli_rejects_installed_global_signature_without_execute_or_with_other_gates(
+        self,
+    ):
+        cases = (
+            ["--firmware", "unused.bin", "--accept-installed-global-signature"],
+            [
+                "--firmware",
+                "unused.bin",
+                "--execute",
+                "--accept-installed-global-signature",
+                "--probe-vendor-model",
+                "--confirm-sha256",
+                "unused",
+            ],
+            [
+                "--firmware",
+                "unused.bin",
+                "--execute",
+                "--accept-installed-global-signature",
+                "--accept-factory-signature",
+                "--confirm-sha256",
+                "unused",
+            ],
+        )
+        for args in cases:
+            with self.subTest(args=args):
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    status = ota.main(args)
+                self.assertEqual(status, 2)
 
     def test_cli_rejects_factory_signature_without_execute_and_flag_combination(self):
         for args in (
@@ -421,6 +535,68 @@ import tools.macos_ota
 
 
 class ExecuteSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_execute_rejects_installed_signature_with_other_authorization_gate(self):
+        for options in (
+            {"probe_vendor_model": True},
+            {"accept_factory_signature": True},
+        ):
+            with (
+                self.subTest(options=options),
+                patch.object(
+                    ota, "collect_preflight_on_client", AsyncMock()
+                ) as collect,
+                self.assertRaisesRegex(ota.ExecutePreflightError, "併用"),
+            ):
+                await ota.execute_on_client(
+                    object(),
+                    advertised_name="Cube Pocket Keyboard 1",
+                    image=approved_jp_image(),
+                    data=b"approved-data",
+                    operation_timeout=5,
+                    accept_installed_global_signature=True,
+                    **options,
+                )
+
+            collect.assert_not_awaited()
+
+    async def test_installed_global_fallback_authorizes_jp_with_global_model(self):
+        report = ota.PreflightReport(
+            advertised_name="Cube Pocket Keyboard 1",
+            gatt_model="PAR2801",
+            gatt_revision="1.0.0",
+            vendor_ota_model=None,
+            current_ota_version="1.0.1",
+            current_ota_checksum=0xEC27,
+            target_image_kind="jp_lang",
+            target_full_file_sum16=0xEC29,
+            checksums_comparable=False,
+            ready_for_future_flash=True,
+            blockers=(),
+            installed_global_signature_matched=True,
+        )
+        engine = SimpleNamespace(flash=AsyncMock())
+        data = b"approved-data"
+        with (
+            patch.object(
+                ota, "collect_preflight_on_client", AsyncMock(return_value=report)
+            ),
+            patch.object(
+                gatt_ota, "authorize_firmware", return_value=object()
+            ) as authorize,
+            patch.object(gatt_ota, "GattOtaEngine", return_value=engine),
+        ):
+            await ota.execute_on_client(
+                object(),
+                advertised_name="Cube Pocket Keyboard 1",
+                image=approved_jp_image(),
+                data=data,
+                operation_timeout=5,
+                accept_installed_global_signature=True,
+            )
+
+        authorize.assert_called_once_with(data, "B077T_US_13", recovery=False)
+        engine.flash.assert_awaited_once()
+
     async def test_execute_rejects_factory_and_vendor_probe_combination(self):
         with (
             patch.object(ota, "collect_preflight_on_client", AsyncMock()) as collect,
@@ -717,6 +893,27 @@ class FakeGattPreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(report.vendor_ota_model)
         self.assertFalse(report.ready_for_future_flash)
         self.assertIn("Vendor OTA model B077Tを確認できません", report.blockers)
+
+    async def test_installed_global_signature_does_not_send_model_probe_commands(self):
+        script = normal_script()
+        script[-1] = GattStep("read", INSTALLED_GLOBAL_FW_INFO_FRAME)
+        client = self.make_client(script)
+
+        report = await ota.collect_preflight_on_client(
+            client,
+            advertised_name="Cube Pocket Keyboard 2",
+            image=approved_jp_image(),
+            settle_seconds=0,
+            operation_timeout=0.01,
+            accept_installed_global_signature=True,
+        )
+
+        client.assert_complete()
+        self.assertEqual(
+            client.writes,
+            [(b"\x10\x00", True), (b"\x23\x00", True)],
+        )
+        self.assertTrue(report.installed_global_signature_matched)
 
     async def test_timeout_stops_without_an_additional_write(self):
         script = normal_script()

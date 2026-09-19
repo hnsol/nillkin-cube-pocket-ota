@@ -36,6 +36,9 @@ else:
 _REQUIRED_GATT = frozenset({"ff00", "ff01", "ff02", "ff03"})
 _FACTORY_FW_INFO = bytes.fromhex("0e 09 23 00 31 2e 30 00 00 62 61")
 _FACTORY_NAME = "Cube Pocket Keyboard 3"
+_INSTALLED_GLOBAL_FW_INFO = bytes.fromhex(
+    "0e 09 23 00 31 2e 30 2e 31 27 ec"
+)
 
 
 class ExecutePreflightError(RuntimeError):
@@ -56,6 +59,7 @@ class PreflightReport:
     ready_for_future_flash: bool
     blockers: tuple[str, ...]
     factory_signature_matched: bool = False
+    installed_global_signature_matched: bool = False
 
 
 def _is_approved_image(image: firmware_image.ValidatedImage | None) -> bool:
@@ -72,6 +76,18 @@ def _model_value(model: str | ota_protocol.ModelIdentity | None) -> str | None:
     return model if isinstance(model, str) else None
 
 
+def _is_installed_signature_target(
+    image: firmware_image.ValidatedImage | None,
+) -> bool:
+    if image is None:
+        return False
+    if image.profile.kind is firmware_image.ImageKind.CONFIGURED:
+        return True
+    return image.profile == firmware_image.APPROVED_IMAGES[
+        firmware_image.ImageKind.JP_LANG
+    ]
+
+
 def evaluate_preflight(
     identity: ble_transport.GattIdentity,
     model: str | ota_protocol.ModelIdentity | None,
@@ -79,6 +95,7 @@ def evaluate_preflight(
     image: firmware_image.ValidatedImage | None,
     *,
     accept_factory_signature: bool = False,
+    accept_installed_global_signature: bool = False,
 ) -> PreflightReport:
     """Evaluate future write gates without performing any device I/O."""
     vendor_model = _model_value(model)
@@ -96,10 +113,20 @@ def evaluate_preflight(
         and image.profile
         == firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL]
     )
+    installed_global_signature_matched = bool(
+        accept_installed_global_signature
+        and vendor_model is None
+        and identity.advertised_name in phase1_ble_info.TARGET_NAMES
+        and identity.gatt_model == "PAR2801"
+        and identity.gatt_revision == "1.0.0"
+        and _REQUIRED_GATT.issubset(services)
+        and current_fw.raw == _INSTALLED_GLOBAL_FW_INFO
+        and _is_installed_signature_target(image)
+    )
 
     if (
         vendor_model is None or not vendor_model.startswith("B077T")
-    ) and not factory_signature_matched:
+    ) and not factory_signature_matched and not installed_global_signature_matched:
         blockers.append("Vendor OTA model B077Tを確認できません")
     if identity.advertised_name not in phase1_ble_info.TARGET_NAMES:
         blockers.append("advertised nameがallowlistと一致しません")
@@ -126,6 +153,7 @@ def evaluate_preflight(
         ready_for_future_flash=not blockers,
         blockers=tuple(blockers),
         factory_signature_matched=factory_signature_matched,
+        installed_global_signature_matched=installed_global_signature_matched,
     )
 
 
@@ -140,6 +168,7 @@ async def collect_preflight(
     connect_timeout: float = 10.0,
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
+    accept_installed_global_signature: bool = False,
 ) -> PreflightReport:
     """Collect the fixed read-only Phase 1 sequence and evaluate its gates."""
     result = await phase1_ble_info.collect_phase1_info(
@@ -168,6 +197,7 @@ async def collect_preflight(
         current_fw,
         image,
         accept_factory_signature=accept_factory_signature,
+        accept_installed_global_signature=accept_installed_global_signature,
     )
 
 
@@ -180,6 +210,7 @@ async def collect_preflight_on_client(
     operation_timeout: float = 5.0,
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
+    accept_installed_global_signature: bool = False,
 ) -> PreflightReport:
     """Run the confirmed read-only probe without reconnecting the client."""
     services = list(client.services)
@@ -246,6 +277,7 @@ async def collect_preflight_on_client(
         current_fw,
         image,
         accept_factory_signature=accept_factory_signature,
+        accept_installed_global_signature=accept_installed_global_signature,
     )
 
 
@@ -260,11 +292,18 @@ async def execute_on_client(
     operation_timeout: float,
     probe_vendor_model: bool = False,
     accept_factory_signature: bool = False,
+    accept_installed_global_signature: bool = False,
 ) -> PreflightReport:
     """Authorize and flash only after a fresh probe on this exact connection."""
-    if accept_factory_signature and probe_vendor_model:
+    if sum(
+        (
+            probe_vendor_model,
+            accept_factory_signature,
+            accept_installed_global_signature,
+        )
+    ) > 1:
         raise ExecutePreflightError(
-            "--accept-factory-signatureと--probe-vendor-modelは併用できません"
+            "model確認用のオプションは併用できません"
         )
     report = await collect_preflight_on_client(
         client,
@@ -273,6 +312,7 @@ async def execute_on_client(
         operation_timeout=operation_timeout,
         probe_vendor_model=probe_vendor_model,
         accept_factory_signature=accept_factory_signature,
+        accept_installed_global_signature=accept_installed_global_signature,
     )
     if not report.ready_for_future_flash:
         raise ExecutePreflightError(
@@ -283,18 +323,26 @@ async def execute_on_client(
     if (
         image.profile.kind is not firmware_image.ImageKind.GLOBAL
         and not probe_vendor_model
+        and not accept_installed_global_signature
     ):
         raise ExecutePreflightError(
-            "JP_LANG/CONFIGUREDには--probe-vendor-modelが必要です"
+            "JP_LANG/CONFIGUREDには--probe-vendor-modelまたは"
+            "--accept-installed-global-signatureが必要です"
         )
     authorization_model = report.vendor_ota_model
     if authorization_model is None:
         global_profile = firmware_image.APPROVED_IMAGES[firmware_image.ImageKind.GLOBAL]
-        if not (
+        factory_fallback = (
             accept_factory_signature
             and report.factory_signature_matched
             and image.profile == global_profile
-        ):
+        )
+        installed_global_fallback = (
+            accept_installed_global_signature
+            and report.installed_global_signature_matched
+            and _is_installed_signature_target(image)
+        )
+        if not (factory_fallback or installed_global_fallback):
             raise ExecutePreflightError("Vendor OTA model B077Tを確認できません")
         authorization_model = global_profile.embedded_version.decode("ascii")
     if config is None:
@@ -323,6 +371,14 @@ def print_report(report: PreflightReport) -> None:
     print(
         "Factory signature: "
         + ("matched" if report.factory_signature_matched else "not used")
+    )
+    print(
+        "Installed GLOBAL signature: "
+        + (
+            "matched"
+            if report.installed_global_signature_matched
+            else "not used"
+        )
     )
     print(f"Current OTA version: {report.current_ota_version}")
     print(f"Current OTA checksum: 0x{report.current_ota_checksum:04X}")
@@ -396,6 +452,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--accept-factory-signature",
         action="store_true",
         help="既知factory fingerprintから固定GLOBALへの初回書込みだけを許可する",
+    )
+    parser.add_argument(
+        "--accept-installed-global-signature",
+        action="store_true",
+        help="導入済みGLOBAL fingerprintからJP_LANG/設定生成FWへの書込みを許可する",
     )
     parser.add_argument(
         "--probe-vendor-model",
@@ -499,6 +560,9 @@ async def _run_execute(
             accept_factory_signature=getattr(
                 args, "accept_factory_signature", False
             ),
+            accept_installed_global_signature=getattr(
+                args, "accept_installed_global_signature", False
+            ),
         )
 
 
@@ -510,9 +574,21 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    if args.accept_factory_signature and args.probe_vendor_model:
+    if args.accept_installed_global_signature and not args.execute:
         print(
-            "error: --accept-factory-signatureと--probe-vendor-modelは併用できません",
+            "error: --accept-installed-global-signatureは--execute時だけ指定できます",
+            file=sys.stderr,
+        )
+        return 2
+    if sum(
+        (
+            args.accept_factory_signature,
+            args.accept_installed_global_signature,
+            args.probe_vendor_model,
+        )
+    ) > 1:
+        print(
+            "error: model確認用のオプションは併用できません",
             file=sys.stderr,
         )
         return 2
