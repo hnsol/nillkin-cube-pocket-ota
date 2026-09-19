@@ -78,6 +78,9 @@ WNR上限はそれぞれ20/47 bytesです。deviceのflash書込み境界に合�
 deviceのACK timingがhostの3904 bytes dispatch境界に一致しない可能性があるため、中間PRNでは
 待機せず4096-byte object末尾のchecksum ACKを採用します。一致しない早期ACKは記録して読み飛ばし、
 末尾checksumと一致するACKがtimeoutまでに来なければupgrade/resetせず停止します。
+全payload転送後の`0x18` upgrade ACKは専用の30秒deadlineで待ちます。timeout時は
+finalization結果が不明なため`0x22` resetも再送も行いません。FWを再送せず、手動で電源を
+入れ直した後、通常のread-only preflightで現在のOTA version/checksumを確認してください。
 
 工場出荷FWからの初回更新に限り、`--accept-factory-signature`で固定GLOBAL原本だけを許可できます。advertised name `Cube Pocket Keyboard 3`、GATT model `PAR2801`、revision `1.0.0`、必須`ff00`/`ff01`/`ff02`/`ff03`、`0x23` raw応答 `0e 09 23 00 31 2e 30 00 00 62 61`がすべて完全一致した場合だけです。checksum `0x6162`だけでは識別しません。JP_LANG、設定生成FW、復旧には使えません。
 
@@ -147,8 +150,9 @@ python3 -m tools.macos_recover \
 
 ## 安全性と制限
 
-- GLOBAL復旧書込みは実機で完了確認済みです（再起動後`1.0.1` / `0xEC27`）。再起動切断時のnotify cleanupも正常終了扱いに修正済みです。JP_LANG書込みは未検証です。
+- GLOBAL書込み・復旧は実機で完了確認済みです（再起動後`1.0.1` / `0xEC27`）。JP_LANG書込みも実機で確認済みです（再起動後`1.0.1` / `0xEC29`）。JP_LANG確認時は`0x18` ACKをhostが受信できず待機が継続しましたが、手動電源再投入後のread-only照会で`0xEC29`を確認しました。
 - OTA中断や完全brick後にBLE広告が出ない場合、このツールだけでは復旧できません。
+- このツールは完全brickからの復旧を保証しません。
 - vendor提供のfirmwareおよびtoolは再配布しません。
 - 実機へ書込む前に、まずGLOBALへの書込みと復旧を検証してください。必要なら`--device-uuid`はscan対象の絞込みにだけ使えます。
 

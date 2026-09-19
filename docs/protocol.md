@@ -95,10 +95,22 @@ object末尾でrunning sum16に一致する`0x17`を待ちます。有効な形�
 一致ACKが得られなければupgrade/resetしません。物理分割しない場合は従来どおり各PRN境界で待機します。
 payload dispatch順も通知に記録し、boundaryより前のwriteに対応する一致ACKは採用しません。
 object-create後の`0x25`待機とupgrade後の`0x18`待機では、直前objectから遅延した`0x17`だけを
-共通deadline内で読み飛ばします。複数届いてもdeadlineは延長せず、別opcodeはraw frame付きで即時停止します。
+それぞれのdeadline内で読み飛ばします。複数届いてもdeadlineは延長せず、別opcodeはraw frame付きで即時停止します。
+`0x18` upgrade ACKだけは通常ACK timeoutとは別の30秒deadlineを使います。deadlineまでに
+受信できなければ、payload転送完了後のfinalization結果が不明な状態として`0x22` resetを送らず
+停止します。この場合はFWを再送せず、手動で電源を入れ直した後、通常のread-only preflightで
+現在のOTA version/checksumを確認します。
 host上限を取得できない場合や不正な場合はobject-create前に停止します。
 診断用に`0x27`のoffset/checksum/max object size/論理ブロック長/PRN threshold、host WNR上限、
 物理断片サイズ・実際の物理断片pacingをengine上に保持し、payload送信または`0x17` ACK待機の失敗時はCLIエラーにも
 object/論理payload位置・長さとWNR readinessのfalse観測回数・累積待機時間を含めます。
 244-byte単位のWRは実機でACKを得られなかったため、WR経路と実験オプションはありません。
 `--show-transfer-plan`は引き続き表示専用で、実機へは何も送信しません。
+
+## 実機確認
+
+GLOBAL書込み・復旧は再起動後`1.0.1` / `0xEC27`、JP_LANG書込みは再起動後
+`1.0.1` / `0xEC29`を確認済みです。JP_LANG確認時はhostが`0x18` ACKを受信できず
+待機が継続しましたが、手動電源再投入後のread-only照会で`0xEC29`を確認しました。
+この事例は完全brickからの復旧可能性を示すものではなく、本ツールは完全brickからの復旧を
+保証しません。BLE広告が出ない場合は本ツールだけでは状態照会・復旧できません。

@@ -1098,7 +1098,7 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
-    async def test_upgrade_wait_ignores_ack_timeout_until_delayed_success_ack(self):
+    async def test_upgrade_wait_uses_final_ack_timeout_not_ack_timeout(self):
         firmware = b"\x01\x02"
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = DelayedUpgradeAckGattClient(
@@ -1120,11 +1120,12 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             chunk_pacing_seconds=0,
             operation_timeout=0.1,
             ack_timeout=0.01,
+            final_ack_timeout=0.05,
         ).flash(authorize(firmware))
 
         self.assertIn(("write", "ff01", b"\x22\x00", False), client.events)
 
-    async def test_upgrade_wait_with_only_stale_prn_acks_is_cancelable_without_reset(self):
+    async def test_missing_upgrade_ack_times_out_without_reset_and_reports_recovery(self):
         firmware = b"\x01\x02"
         upgrade = bytes.fromhex("18 02000000 0300 312e302e31")
         client = FakeGattClient(
@@ -1140,18 +1141,22 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with self.assertRaises(asyncio.TimeoutError):
-            await asyncio.wait_for(
-                gatt_ota.GattOtaEngine(
-                    client,
-                    settle_seconds=0,
-                    operation_timeout=0.1,
-                    ack_timeout=0.01,
-                ).flash(authorize(firmware)),
-                timeout=0.03,
-            )
+        with self.assertRaisesRegex(
+            gatt_ota.GattTimeoutError,
+            r"firmware payload transfer completed; finalization outcome unknown; "
+            r"reset not sent; do not resend; power-cycle then verify current OTA "
+            r"version/checksum read-only",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.1,
+                final_ack_timeout=0.01,
+            ).flash(authorize(firmware))
 
         writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertEqual(writes[-1], upgrade)
         self.assertNotIn(b"\x22\x00", writes)
 
     async def test_only_stale_prn_acks_while_waiting_for_object_times_out(self):
@@ -1601,6 +1606,10 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
             {"operation_timeout": -1},
             {"ack_timeout": 0},
             {"ack_timeout": -1},
+            {"final_ack_timeout": 0},
+            {"final_ack_timeout": -1},
+            {"final_ack_timeout": float("nan")},
+            {"final_ack_timeout": float("inf")},
             {"settle_seconds": -1},
             {"chunk_pacing_seconds": -1},
         ):

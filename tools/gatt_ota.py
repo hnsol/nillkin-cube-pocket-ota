@@ -139,12 +139,14 @@ class GattOtaEngine:
         chunk_pacing_seconds: float = _DEFAULT_CHUNK_PACING_SECONDS,
         operation_timeout: float = 5.0,
         ack_timeout: float = 10.0,
+        final_ack_timeout: float = 30.0,
     ) -> None:
         for name, value, allow_zero in (
             ("settle_seconds", settle_seconds, True),
             ("chunk_pacing_seconds", chunk_pacing_seconds, True),
             ("operation_timeout", operation_timeout, False),
             ("ack_timeout", ack_timeout, False),
+            ("final_ack_timeout", final_ack_timeout, False),
         ):
             if (
                 not isinstance(value, (int, float))
@@ -162,6 +164,7 @@ class GattOtaEngine:
         self._chunk_pacing_seconds = chunk_pacing_seconds
         self._operation_timeout = operation_timeout
         self._ack_timeout = ack_timeout
+        self._final_ack_timeout = final_ack_timeout
         self._notifications: asyncio.Queue[tuple[bytes, int]] = asyncio.Queue()
         self._payload_dispatch_counter = 0
         self._used = False
@@ -363,26 +366,20 @@ class GattOtaEngine:
         stage: str | None = None,
         minimum_payload_dispatch_counter: int | None = None,
         ignored_opcodes: frozenset[int] = frozenset(),
-        use_ack_timeout: bool = True,
+        timeout: float | None = None,
     ) -> bytes:
         wait_stage = stage or f"ACK 0x{expected_opcode:02x}"
-        deadline = (
-            asyncio.get_running_loop().time() + self._ack_timeout
-            if use_ack_timeout
-            else None
-        )
+        wait_timeout = self._ack_timeout if timeout is None else timeout
+        deadline = asyncio.get_running_loop().time() + wait_timeout
         while True:
-            if deadline is None:
-                frame, payload_dispatch_counter = await self._notifications.get()
-            else:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    raise GattTimeoutError(f"{wait_stage} timed out")
-                frame, payload_dispatch_counter = await self._bounded(
-                    self._notifications.get(),
-                    wait_stage,
-                    remaining,
-                )
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise GattTimeoutError(f"{wait_stage} timed out")
+            frame, payload_dispatch_counter = await self._bounded(
+                self._notifications.get(),
+                wait_stage,
+                remaining,
+            )
             if (
                 frame
                 and frame[0] in ignored_opcodes
@@ -607,11 +604,19 @@ class GattOtaEngine:
                 self._drain_notifications()
                 await self._write(self._control, operation.payload, response=True)
             elif operation.kind == "wait-upgrade":
-                frame = await self._wait_notification(
-                    0x18,
-                    ignored_opcodes=_STALE_PRN_OPCODES,
-                    use_ack_timeout=False,
-                )
+                try:
+                    frame = await self._wait_notification(
+                        0x18,
+                        ignored_opcodes=_STALE_PRN_OPCODES,
+                        timeout=self._final_ack_timeout,
+                    )
+                except GattTimeoutError as exc:
+                    raise GattTimeoutError(
+                        "upgrade ACK 0x18 timed out; firmware payload transfer "
+                        "completed; finalization outcome unknown; reset not sent; "
+                        "do not resend; power-cycle then verify current OTA "
+                        "version/checksum read-only"
+                    ) from exc
                 if len(frame) == 4 and frame[1] != 0:
                     rejection = (
                         "upgrade ACK reports failure: "
