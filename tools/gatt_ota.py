@@ -494,7 +494,10 @@ class GattOtaEngine:
                     raise GattProtocolError(f"malformed checksum ACK during {ack_stage}")
                 if checksum != operation.expected_checksum:
                     raise GattProtocolError(
-                        f"running checksum ACK does not match during {ack_stage}"
+                        "running checksum ACK does not match: "
+                        f"expected=0x{operation.expected_checksum:04X}, "
+                        f"received=0x{checksum:04X}, raw={frame.hex(' ')}; "
+                        f"during {ack_stage}"
                     )
                 prn_window_start = True
             elif operation.kind == "upgrade":

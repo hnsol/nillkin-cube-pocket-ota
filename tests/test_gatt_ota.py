@@ -941,6 +941,24 @@ class NormalTransferTests(unittest.IsolatedAsyncioTestCase):
                     [e[2] for e in client.events if e[0] == "write"],
                 )
 
+    async def test_mismatched_checksum_reports_expected_received_and_raw_ack(self):
+        client = small_transfer_client(checksum_ack=bytes.fromhex("17 0400"))
+
+        with self.assertRaisesRegex(
+            gatt_ota.GattProtocolError,
+            r"expected=0x0003, received=0x0004, raw=17 04 00",
+        ):
+            await gatt_ota.GattOtaEngine(
+                client,
+                settle_seconds=0,
+                operation_timeout=0.1,
+                ack_timeout=0.1,
+            ).flash(authorize(b"\x01\x02"))
+
+        writes = [event[2] for event in client.events if event[0] == "write"]
+        self.assertFalse(any(payload.startswith(b"\x18") for payload in writes))
+        self.assertNotIn(b"\x22\x00", writes)
+
     async def test_early_checksum_collision_ack_cannot_satisfy_prn_boundary(self):
         firmware = b"\x01\x02\x00\x00"
         upgrade = bytes.fromhex("18 04000000 0300 312e302e310000000000")
