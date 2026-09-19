@@ -109,6 +109,7 @@ BLE広告が出ない完全brick状態は、このツールだけでは照会・
 - `configs/jp-lang.toml`をコピーして変更する。
 - 確認済みGLOBAL原本と同じ設定から、対象FWを毎回再生成する。
 - 指定していない物理キーは変更されない。
+- fnコンビネーションは物理キーではなく出力usageに追従する。JP_LANGでは`fn`+左option＝タッチパッド/テンキー切替、`fn`+右option＝バッテリー表示、`fn`+caps lock＝スクリーンキーボード（いずれも実機確認済み）。`left_gui`/`right_gui`を出すキーをなくすと押せなくなる可能性がある（未検証）。
 - 生成後の差分、sum16、SHA-256を保存する。
 - 書き込んだTOMLを保管する。`--accept-installed-remap-signature`で稼働中FWを認識するのに必要。
 - vendor firmwareとWindows toolはリポジトリに含まれない。

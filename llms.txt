@@ -45,6 +45,7 @@ Python 3.14 (tested on 3.14.4), `bleak` 3.x on CoreBluetooth, `tomllib`. OTA opc
 - Can brick the keyboard; no recovery if BLE advertising stops.
 - Re-flashing over an installed remap (`--accept-installed-remap-signature`) is unit-tested but not yet verified on hardware as of 2026-09-19.
 - Only 6 keys and 12 output usages.
+- Fn combinations follow the emitted usage, not the physical key: after `jp-lang.toml`, fn + left Option toggles touchpad/numpad, fn + right Option shows battery level and fn + Caps Lock opens the on-screen keyboard (all verified); the printed icons stay on the Command keys. A layout with no key emitting Left/Right Command may lose those fn functions (untested).
 - Flashing works from macOS only; Linux and Windows are not supported.
 - No return to factory `1.0` firmware; vendor GLOBAL `1.0.1` is the stock layout you can restore.
 - The final `0x18` ACK may time out even when the update succeeded; verify after a power cycle instead of re-sending.

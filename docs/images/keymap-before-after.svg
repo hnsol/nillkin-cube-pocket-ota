@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 1240 860" width="1240" height="860">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 1240 944" width="1240" height="944">
   <title>Nillkin Cube Pocket key layout before and after remapping</title>
-  <desc>Nillkin Cube Pocket physical key remapping: caps lock becomes control; left control becomes option; left option becomes command; left command becomes 英数 (eisu / LANG2); right command becomes かな (kana / LANG1); right option becomes command.</desc>
+  <desc>Nillkin Cube Pocket physical key remapping: caps lock becomes control; left control becomes option; left option becomes command; left command becomes 英数 (eisu / LANG2); right command becomes かな (kana / LANG1); right option becomes command. Fn combinations follow the emitted usage: fn+Command (left) toggles touchpad/numpad and fn+Command (right) shows battery level, so after remapping they are on the physical option keys.</desc>
   <style>
     text { font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", "Noto Sans CJK JP", Arial, sans-serif; }
     .panel-title { fill: #8b949e; font-weight: 600; font-size: 22px; }
@@ -23,7 +23,7 @@
   </style>
   <text class="panel-title" x="47.1" y="30">BEFORE — factory / GLOBAL firmware (US layout)</text>
   <g>
-    <rect class="card" x="47.1" y="46" width="1145.8" height="336" rx="18"/>
+    <rect class="card" x="47.1" y="46" width="1145.8" height="366" rx="18"/>
     <line class="hinge" x1="450.6" y1="62" x2="450.6" y2="366"/>
     <line class="hinge" x1="961.1" y1="62" x2="961.1" y2="366"/>
     <rect class="key" x="63.1" y="62" width="56" height="56" rx="7"/>
@@ -153,150 +153,211 @@
     <text class="legend legend-dim" x="928.1" y="343.95" text-anchor="middle" font-size="17">→</text>
     <rect class="touchpad" x="966.1" y="62" width="210.8" height="304" rx="10"/>
     <text class="touchpad-label" x="1071.5" y="218" text-anchor="middle">touchpad / numpad</text>
+    <line x1="319.73" y1="366" x2="319.73" y2="371" stroke="#7fd6c8" stroke-width="1" opacity=".6"/>
+    <text x="301.23" y="381" text-anchor="start" font-size="10" fill="#7fd6c8">fn+</text>
+    <rect x="318.23" y="371.5" width="7" height="12" rx="1.5" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <line x1="326.73" y1="382.5" x2="329.73" y2="372" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="329.23" y="371.5" width="9" height="12" rx="1.5" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="330.13" y="372.4" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="335.93" y="372.4" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="330.13" y="376.8" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="335.93" y="376.8" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="330.13" y="381.2" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="335.93" y="381.2" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <line x1="656.85" y1="366" x2="656.85" y2="371" stroke="#7fd6c8" stroke-width="1" opacity=".6"/>
+    <text x="638.35" y="381" text-anchor="start" font-size="10" fill="#7fd6c8">fn+</text>
+    <rect x="655.35" y="373" width="16" height="9" rx="2" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="671.35" y="375.5" width="2" height="4" rx="0.6" fill="#7fd6c8"/>
+    <rect x="656.85" y="375" width="3.2" height="5" fill="#7fd6c8"/>
+    <rect x="661.25" y="375" width="3.2" height="5" fill="#7fd6c8"/>
+    <rect x="665.65" y="375" width="3.2" height="5" fill="#7fd6c8"/>
+    <line x1="106.6" y1="366" x2="106.6" y2="371" stroke="#7fd6c8" stroke-width="1" opacity=".6"/>
+    <text x="88.1" y="381" text-anchor="start" font-size="10" fill="#7fd6c8">fn+</text>
+    <rect x="105.1" y="372" width="18" height="11" rx="2" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="106.1" y="374" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="111.03" y="374" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="115.97" y="374" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="120.9" y="374" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="106.1" y="377" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="111.03" y="377" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="115.97" y="377" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="120.9" y="377" width="1.2" height="1.2" fill="#7fd6c8"/>
+    <rect x="109.1" y="379.9" width="10" height="1.4" rx="0.7" fill="#7fd6c8"/>
   </g>
-  <text class="panel-title" x="47.1" y="430">AFTER — configs/jp-lang.toml (JP_LANG firmware)</text>
+  <text class="panel-title" x="47.1" y="460">AFTER — configs/jp-lang.toml (JP_LANG firmware)</text>
   <g>
-    <rect class="card" x="47.1" y="446" width="1145.8" height="336" rx="18"/>
-    <line class="hinge" x1="450.6" y1="462" x2="450.6" y2="766"/>
-    <line class="hinge" x1="961.1" y1="462" x2="961.1" y2="766"/>
-    <rect class="key" x="63.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="91.1" y="494.2" text-anchor="middle" font-size="12">Esc</text>
-    <rect class="key" x="125.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="153.1" y="495.95" text-anchor="middle" font-size="17">1</text>
-    <rect class="key" x="187.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="215.1" y="495.95" text-anchor="middle" font-size="17">2</text>
-    <rect class="key" x="249.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="277.1" y="495.95" text-anchor="middle" font-size="17">3</text>
-    <rect class="key" x="311.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="339.1" y="495.95" text-anchor="middle" font-size="17">4</text>
-    <rect class="key" x="373.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="401.1" y="495.95" text-anchor="middle" font-size="17">5</text>
-    <rect class="key" x="435.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="463.1" y="495.95" text-anchor="middle" font-size="17">6</text>
-    <rect class="key" x="497.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="525.1" y="495.95" text-anchor="middle" font-size="17">7</text>
-    <rect class="key" x="559.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="587.1" y="495.95" text-anchor="middle" font-size="17">8</text>
-    <rect class="key" x="621.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="649.1" y="495.95" text-anchor="middle" font-size="17">9</text>
-    <rect class="key" x="683.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="711.1" y="495.95" text-anchor="middle" font-size="17">0</text>
-    <rect class="key" x="745.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="773.1" y="495.95" text-anchor="middle" font-size="17">-</text>
-    <rect class="key" x="807.1" y="462" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="835.1" y="495.95" text-anchor="middle" font-size="17">=</text>
-    <rect class="key" x="869.1" y="462" width="87" height="56" rx="7"/>
-    <text class="legend legend-dim" x="912.6" y="494.2" text-anchor="middle" font-size="12">Delete</text>
-    <rect class="key" x="63.1" y="524" width="87" height="56" rx="7"/>
-    <text class="legend legend-dim" x="106.6" y="556.2" text-anchor="middle" font-size="12">tab</text>
-    <rect class="key" x="156.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="184.1" y="557.95" text-anchor="middle" font-size="17">Q</text>
-    <rect class="key" x="218.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="246.1" y="557.95" text-anchor="middle" font-size="17">W</text>
-    <rect class="key" x="280.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="308.1" y="557.95" text-anchor="middle" font-size="17">E</text>
-    <rect class="key" x="342.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="370.1" y="557.95" text-anchor="middle" font-size="17">R</text>
-    <rect class="key" x="404.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="432.1" y="557.95" text-anchor="middle" font-size="17">T</text>
-    <rect class="key" x="466.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="494.1" y="557.95" text-anchor="middle" font-size="17">Y</text>
-    <rect class="key" x="528.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="556.1" y="557.95" text-anchor="middle" font-size="17">U</text>
-    <rect class="key" x="590.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="618.1" y="557.95" text-anchor="middle" font-size="17">I</text>
-    <rect class="key" x="652.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="680.1" y="557.95" text-anchor="middle" font-size="17">O</text>
-    <rect class="key" x="714.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="742.1" y="557.95" text-anchor="middle" font-size="17">P</text>
-    <rect class="key" x="776.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="804.1" y="557.95" text-anchor="middle" font-size="17">[</text>
-    <rect class="key" x="838.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="866.1" y="557.95" text-anchor="middle" font-size="17">]</text>
-    <rect class="key" x="900.1" y="524" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="928.1" y="557.95" text-anchor="middle" font-size="17">\</text>
-    <rect class="key key-remap-after" x="63.1" y="586" width="102.5" height="56" rx="7"/>
-    <text class="legend legend-was" x="67.1" y="597" text-anchor="start" font-size="8.5">was caps lock</text>
-    <text class="legend legend-remap-after" x="114.35" y="626" text-anchor="middle" font-size="12">control</text>
-    <rect class="key" x="171.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="199.6" y="619.95" text-anchor="middle" font-size="17">A</text>
-    <rect class="key" x="233.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="261.6" y="619.95" text-anchor="middle" font-size="17">S</text>
-    <rect class="key" x="295.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="323.6" y="619.95" text-anchor="middle" font-size="17">D</text>
-    <rect class="key" x="357.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="385.6" y="619.95" text-anchor="middle" font-size="17">F</text>
-    <rect class="key" x="419.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="447.6" y="619.95" text-anchor="middle" font-size="17">G</text>
-    <rect class="key" x="481.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="509.6" y="619.95" text-anchor="middle" font-size="17">H</text>
-    <rect class="key" x="543.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="571.6" y="619.95" text-anchor="middle" font-size="17">J</text>
-    <rect class="key" x="605.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="633.6" y="619.95" text-anchor="middle" font-size="17">K</text>
-    <rect class="key" x="667.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="695.6" y="619.95" text-anchor="middle" font-size="17">L</text>
-    <rect class="key" x="729.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="757.6" y="619.95" text-anchor="middle" font-size="17">;</text>
-    <rect class="key" x="791.6" y="586" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="819.6" y="619.95" text-anchor="middle" font-size="17">&apos;</text>
-    <rect class="key" x="853.6" y="586" width="102.5" height="56" rx="7"/>
-    <text class="legend legend-dim" x="904.85" y="618.2" text-anchor="middle" font-size="12">enter</text>
-    <rect class="key" x="63.1" y="648" width="133.5" height="56" rx="7"/>
-    <text class="legend legend-dim" x="129.85" y="680.2" text-anchor="middle" font-size="12">shift</text>
-    <rect class="key" x="202.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="230.6" y="681.95" text-anchor="middle" font-size="17">Z</text>
-    <rect class="key" x="264.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="292.6" y="681.95" text-anchor="middle" font-size="17">X</text>
-    <rect class="key" x="326.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="354.6" y="681.95" text-anchor="middle" font-size="17">C</text>
-    <rect class="key" x="388.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="416.6" y="681.95" text-anchor="middle" font-size="17">V</text>
-    <rect class="key" x="450.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="478.6" y="681.95" text-anchor="middle" font-size="17">B</text>
-    <rect class="key" x="512.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="540.6" y="681.95" text-anchor="middle" font-size="17">N</text>
-    <rect class="key" x="574.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="602.6" y="681.95" text-anchor="middle" font-size="17">M</text>
-    <rect class="key" x="636.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="664.6" y="681.95" text-anchor="middle" font-size="17">,</text>
-    <rect class="key" x="698.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="726.6" y="681.95" text-anchor="middle" font-size="17">.</text>
-    <rect class="key" x="760.6" y="648" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="788.6" y="681.95" text-anchor="middle" font-size="17">/</text>
-    <rect class="key" x="822.6" y="648" width="133.5" height="56" rx="7"/>
-    <text class="legend legend-dim" x="889.35" y="680.2" text-anchor="middle" font-size="12">shift</text>
-    <rect class="key key-remap-after" x="63.1" y="710" width="87" height="56" rx="7"/>
-    <text class="legend legend-was" x="67.1" y="721" text-anchor="start" font-size="8.5">was control</text>
-    <text class="legend legend-remap-after" x="106.6" y="750" text-anchor="middle" font-size="12">option</text>
-    <rect class="key" x="156.1" y="710" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="184.1" y="742.2" text-anchor="middle" font-size="12">fn</text>
-    <rect class="key key-remap-after" x="218.1" y="710" width="63.75" height="56" rx="7"/>
-    <text class="legend legend-was" x="222.1" y="721" text-anchor="start" font-size="8.5">was option</text>
-    <text class="legend legend-remap-after" x="249.98" y="750" text-anchor="middle" font-size="12">command</text>
-    <rect class="key key-remap-after" x="287.85" y="710" width="63.75" height="56" rx="7"/>
-    <text class="legend legend-was" x="291.85" y="721" text-anchor="start" font-size="8.5">was command</text>
-    <text class="legend legend-remap-after" x="319.73" y="744" text-anchor="middle" font-size="15">英数</text>
-    <text class="legend legend-sub" x="319.73" y="758" text-anchor="middle" font-size="9">LANG2</text>
-    <rect class="key" x="357.6" y="710" width="257.5" height="56" rx="7"/>
-    <rect class="key key-remap-after" x="621.1" y="710" width="71.5" height="56" rx="7"/>
-    <text class="legend legend-was" x="625.1" y="721" text-anchor="start" font-size="8.5">was command</text>
-    <text class="legend legend-remap-after" x="656.85" y="744" text-anchor="middle" font-size="15">かな</text>
-    <text class="legend legend-sub" x="656.85" y="758" text-anchor="middle" font-size="9">LANG1</text>
-    <rect class="key key-remap-after" x="698.6" y="710" width="71.5" height="56" rx="7"/>
-    <text class="legend legend-was" x="702.6" y="721" text-anchor="start" font-size="8.5">was option</text>
-    <text class="legend legend-remap-after" x="734.35" y="750" text-anchor="middle" font-size="12">command</text>
-    <rect class="key" x="776.1" y="710" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="804.1" y="743.95" text-anchor="middle" font-size="17">←</text>
-    <rect class="key" x="838.1" y="710" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="866.1" y="743.95" text-anchor="middle" font-size="17">↑↓</text>
-    <rect class="key" x="900.1" y="710" width="56" height="56" rx="7"/>
-    <text class="legend legend-dim" x="928.1" y="743.95" text-anchor="middle" font-size="17">→</text>
-    <rect class="touchpad" x="966.1" y="462" width="210.8" height="304" rx="10"/>
-    <text class="touchpad-label" x="1071.5" y="618" text-anchor="middle">touchpad / numpad</text>
+    <rect class="card" x="47.1" y="476" width="1145.8" height="366" rx="18"/>
+    <line class="hinge" x1="450.6" y1="492" x2="450.6" y2="796"/>
+    <line class="hinge" x1="961.1" y1="492" x2="961.1" y2="796"/>
+    <rect class="key" x="63.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="91.1" y="524.2" text-anchor="middle" font-size="12">Esc</text>
+    <rect class="key" x="125.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="153.1" y="525.95" text-anchor="middle" font-size="17">1</text>
+    <rect class="key" x="187.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="215.1" y="525.95" text-anchor="middle" font-size="17">2</text>
+    <rect class="key" x="249.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="277.1" y="525.95" text-anchor="middle" font-size="17">3</text>
+    <rect class="key" x="311.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="339.1" y="525.95" text-anchor="middle" font-size="17">4</text>
+    <rect class="key" x="373.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="401.1" y="525.95" text-anchor="middle" font-size="17">5</text>
+    <rect class="key" x="435.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="463.1" y="525.95" text-anchor="middle" font-size="17">6</text>
+    <rect class="key" x="497.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="525.1" y="525.95" text-anchor="middle" font-size="17">7</text>
+    <rect class="key" x="559.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="587.1" y="525.95" text-anchor="middle" font-size="17">8</text>
+    <rect class="key" x="621.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="649.1" y="525.95" text-anchor="middle" font-size="17">9</text>
+    <rect class="key" x="683.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="711.1" y="525.95" text-anchor="middle" font-size="17">0</text>
+    <rect class="key" x="745.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="773.1" y="525.95" text-anchor="middle" font-size="17">-</text>
+    <rect class="key" x="807.1" y="492" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="835.1" y="525.95" text-anchor="middle" font-size="17">=</text>
+    <rect class="key" x="869.1" y="492" width="87" height="56" rx="7"/>
+    <text class="legend legend-dim" x="912.6" y="524.2" text-anchor="middle" font-size="12">Delete</text>
+    <rect class="key" x="63.1" y="554" width="87" height="56" rx="7"/>
+    <text class="legend legend-dim" x="106.6" y="586.2" text-anchor="middle" font-size="12">tab</text>
+    <rect class="key" x="156.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="184.1" y="587.95" text-anchor="middle" font-size="17">Q</text>
+    <rect class="key" x="218.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="246.1" y="587.95" text-anchor="middle" font-size="17">W</text>
+    <rect class="key" x="280.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="308.1" y="587.95" text-anchor="middle" font-size="17">E</text>
+    <rect class="key" x="342.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="370.1" y="587.95" text-anchor="middle" font-size="17">R</text>
+    <rect class="key" x="404.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="432.1" y="587.95" text-anchor="middle" font-size="17">T</text>
+    <rect class="key" x="466.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="494.1" y="587.95" text-anchor="middle" font-size="17">Y</text>
+    <rect class="key" x="528.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="556.1" y="587.95" text-anchor="middle" font-size="17">U</text>
+    <rect class="key" x="590.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="618.1" y="587.95" text-anchor="middle" font-size="17">I</text>
+    <rect class="key" x="652.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="680.1" y="587.95" text-anchor="middle" font-size="17">O</text>
+    <rect class="key" x="714.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="742.1" y="587.95" text-anchor="middle" font-size="17">P</text>
+    <rect class="key" x="776.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="804.1" y="587.95" text-anchor="middle" font-size="17">[</text>
+    <rect class="key" x="838.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="866.1" y="587.95" text-anchor="middle" font-size="17">]</text>
+    <rect class="key" x="900.1" y="554" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="928.1" y="587.95" text-anchor="middle" font-size="17">\</text>
+    <rect class="key key-remap-after" x="63.1" y="616" width="102.5" height="56" rx="7"/>
+    <text class="legend legend-was" x="67.1" y="627" text-anchor="start" font-size="8.5">was caps lock</text>
+    <text class="legend legend-remap-after" x="114.35" y="656" text-anchor="middle" font-size="12">control</text>
+    <rect class="key" x="171.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="199.6" y="649.95" text-anchor="middle" font-size="17">A</text>
+    <rect class="key" x="233.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="261.6" y="649.95" text-anchor="middle" font-size="17">S</text>
+    <rect class="key" x="295.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="323.6" y="649.95" text-anchor="middle" font-size="17">D</text>
+    <rect class="key" x="357.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="385.6" y="649.95" text-anchor="middle" font-size="17">F</text>
+    <rect class="key" x="419.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="447.6" y="649.95" text-anchor="middle" font-size="17">G</text>
+    <rect class="key" x="481.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="509.6" y="649.95" text-anchor="middle" font-size="17">H</text>
+    <rect class="key" x="543.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="571.6" y="649.95" text-anchor="middle" font-size="17">J</text>
+    <rect class="key" x="605.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="633.6" y="649.95" text-anchor="middle" font-size="17">K</text>
+    <rect class="key" x="667.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="695.6" y="649.95" text-anchor="middle" font-size="17">L</text>
+    <rect class="key" x="729.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="757.6" y="649.95" text-anchor="middle" font-size="17">;</text>
+    <rect class="key" x="791.6" y="616" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="819.6" y="649.95" text-anchor="middle" font-size="17">&apos;</text>
+    <rect class="key" x="853.6" y="616" width="102.5" height="56" rx="7"/>
+    <text class="legend legend-dim" x="904.85" y="648.2" text-anchor="middle" font-size="12">enter</text>
+    <rect class="key" x="63.1" y="678" width="133.5" height="56" rx="7"/>
+    <text class="legend legend-dim" x="129.85" y="710.2" text-anchor="middle" font-size="12">shift</text>
+    <rect class="key" x="202.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="230.6" y="711.95" text-anchor="middle" font-size="17">Z</text>
+    <rect class="key" x="264.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="292.6" y="711.95" text-anchor="middle" font-size="17">X</text>
+    <rect class="key" x="326.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="354.6" y="711.95" text-anchor="middle" font-size="17">C</text>
+    <rect class="key" x="388.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="416.6" y="711.95" text-anchor="middle" font-size="17">V</text>
+    <rect class="key" x="450.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="478.6" y="711.95" text-anchor="middle" font-size="17">B</text>
+    <rect class="key" x="512.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="540.6" y="711.95" text-anchor="middle" font-size="17">N</text>
+    <rect class="key" x="574.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="602.6" y="711.95" text-anchor="middle" font-size="17">M</text>
+    <rect class="key" x="636.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="664.6" y="711.95" text-anchor="middle" font-size="17">,</text>
+    <rect class="key" x="698.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="726.6" y="711.95" text-anchor="middle" font-size="17">.</text>
+    <rect class="key" x="760.6" y="678" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="788.6" y="711.95" text-anchor="middle" font-size="17">/</text>
+    <rect class="key" x="822.6" y="678" width="133.5" height="56" rx="7"/>
+    <text class="legend legend-dim" x="889.35" y="710.2" text-anchor="middle" font-size="12">shift</text>
+    <rect class="key key-remap-after" x="63.1" y="740" width="87" height="56" rx="7"/>
+    <text class="legend legend-was" x="67.1" y="751" text-anchor="start" font-size="8.5">was control</text>
+    <text class="legend legend-remap-after" x="106.6" y="780" text-anchor="middle" font-size="12">option</text>
+    <rect class="key" x="156.1" y="740" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="184.1" y="772.2" text-anchor="middle" font-size="12">fn</text>
+    <rect class="key key-remap-after" x="218.1" y="740" width="63.75" height="56" rx="7"/>
+    <text class="legend legend-was" x="222.1" y="751" text-anchor="start" font-size="8.5">was option</text>
+    <text class="legend legend-remap-after" x="249.98" y="780" text-anchor="middle" font-size="12">command</text>
+    <rect class="key key-remap-after" x="287.85" y="740" width="63.75" height="56" rx="7"/>
+    <text class="legend legend-was" x="291.85" y="751" text-anchor="start" font-size="8.5">was command</text>
+    <text class="legend legend-remap-after" x="319.73" y="774" text-anchor="middle" font-size="15">英数</text>
+    <text class="legend legend-sub" x="319.73" y="788" text-anchor="middle" font-size="9">LANG2</text>
+    <rect class="key" x="357.6" y="740" width="257.5" height="56" rx="7"/>
+    <rect class="key key-remap-after" x="621.1" y="740" width="71.5" height="56" rx="7"/>
+    <text class="legend legend-was" x="625.1" y="751" text-anchor="start" font-size="8.5">was command</text>
+    <text class="legend legend-remap-after" x="656.85" y="774" text-anchor="middle" font-size="15">かな</text>
+    <text class="legend legend-sub" x="656.85" y="788" text-anchor="middle" font-size="9">LANG1</text>
+    <rect class="key key-remap-after" x="698.6" y="740" width="71.5" height="56" rx="7"/>
+    <text class="legend legend-was" x="702.6" y="751" text-anchor="start" font-size="8.5">was option</text>
+    <text class="legend legend-remap-after" x="734.35" y="780" text-anchor="middle" font-size="12">command</text>
+    <rect class="key" x="776.1" y="740" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="804.1" y="773.95" text-anchor="middle" font-size="17">←</text>
+    <rect class="key" x="838.1" y="740" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="866.1" y="773.95" text-anchor="middle" font-size="17">↑↓</text>
+    <rect class="key" x="900.1" y="740" width="56" height="56" rx="7"/>
+    <text class="legend legend-dim" x="928.1" y="773.95" text-anchor="middle" font-size="17">→</text>
+    <rect class="touchpad" x="966.1" y="492" width="210.8" height="304" rx="10"/>
+    <text class="touchpad-label" x="1071.5" y="648" text-anchor="middle">touchpad / numpad</text>
+    <line x1="249.98" y1="796" x2="249.98" y2="801" stroke="#7fd6c8" stroke-width="1" opacity=".6"/>
+    <text x="231.48" y="811" text-anchor="start" font-size="10" fill="#7fd6c8">fn+</text>
+    <rect x="248.48" y="801.5" width="7" height="12" rx="1.5" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <line x1="256.98" y1="812.5" x2="259.98" y2="802" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="259.48" y="801.5" width="9" height="12" rx="1.5" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="260.38" y="802.4" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="266.18" y="802.4" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="260.38" y="806.8" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="266.18" y="806.8" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="260.38" y="811.2" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <rect x="266.18" y="811.2" width="1.4" height="1.4" fill="#7fd6c8"/>
+    <line x1="734.35" y1="796" x2="734.35" y2="801" stroke="#7fd6c8" stroke-width="1" opacity=".6"/>
+    <text x="715.85" y="811" text-anchor="start" font-size="10" fill="#7fd6c8">fn+</text>
+    <rect x="732.85" y="803" width="16" height="9" rx="2" fill="none" stroke="#7fd6c8" stroke-width="1.3"/>
+    <rect x="748.85" y="805.5" width="2" height="4" rx="0.6" fill="#7fd6c8"/>
+    <rect x="734.35" y="805" width="3.2" height="5" fill="#7fd6c8"/>
+    <rect x="738.75" y="805" width="3.2" height="5" fill="#7fd6c8"/>
+    <rect x="743.15" y="805" width="3.2" height="5" fill="#7fd6c8"/>
+    <text x="122.6" y="639.48" text-anchor="start" font-size="8.5" fill="#b8f3ea">fn+</text>
+    <rect x="135.6" y="631" width="18" height="11" rx="2" fill="none" stroke="#b8f3ea" stroke-width="1.3"/>
+    <rect x="136.6" y="633" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="141.53" y="633" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="146.47" y="633" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="151.4" y="633" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="136.6" y="636" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="141.53" y="636" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="146.47" y="636" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="151.4" y="636" width="1.2" height="1.2" fill="#b8f3ea"/>
+    <rect x="139.6" y="638.9" width="10" height="1.4" rx="0.7" fill="#b8f3ea"/>
   </g>
-  <rect class="swatch-before" x="47.1" y="812" width="14" height="14" rx="3"/>
-  <text class="legend-line-text" x="69.1" y="824">keys that will change</text>
-  <rect class="swatch-after" x="347.1" y="812" width="14" height="14" rx="3"/>
-  <text class="legend-line-text" x="369.1" y="824">remapped output</text>
+  <rect class="swatch-before" x="47.1" y="872" width="14" height="14" rx="3"/>
+  <text class="legend-line-text" x="69.1" y="884">keys that will change</text>
+  <rect class="swatch-after" x="347.1" y="872" width="14" height="14" rx="3"/>
+  <text class="legend-line-text" x="369.1" y="884">remapped output</text>
+  <text x="47.1" y="908" font-size="14" fill="#7fd6c8">fn+</text>
+  <text class="legend-line-text" x="74.1" y="908">fn combos follow the key&#39;s output, so they move with Command / Control</text>
 </svg>

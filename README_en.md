@@ -29,6 +29,18 @@ The bundled example, [`configs/jp-lang.toml`](configs/jp-lang.toml), turns the U
 | right `command` | Command | **かな / Kana (LANG1)** | `0xE7` → `0x90` |
 | right `option` | Option | **Command** | `0xE6` → `0xE7` |
 
+### Fn combinations follow the remapped output
+
+The keyboard has fn combinations printed as teal icons on some keys. On the verified unit these are bound to the **HID usage a key emits**, not to the physical key, so they move when you remap.
+
+| Function | Factory | After `jp-lang.toml` | Status |
+|---|---|---|---|
+| Touchpad / numpad toggle | `fn` + left `command` (icon printed here) | `fn` + left `option` (the key that now emits Left Command) | Verified on hardware |
+| Battery level | `fn` + right `command` (icon printed here) | `fn` + right `option` (the key that now emits Right Command) | Verified on hardware |
+| On-screen keyboard | `fn` + `control` (icon printed here) | `fn` + `caps lock` (the key that now emits Control) | Verified on hardware |
+
+The keycap legends do not change, so the printed icon and the working key no longer coincide. If a custom TOML leaves no key emitting Left Command (`left_gui`) or Right Command (`right_gui`), the corresponding fn combination may become unreachable (untested).
+
 ## The Key Remapping Problem This Solves
 
 The Nillkin Cube Pocket is a good pocket keyboard: it folds to phone size, has a touchpad, and pairs with three devices. It ships only in US, German, Spanish and Arabic layouts, and the vendor provides no remapping tool.
