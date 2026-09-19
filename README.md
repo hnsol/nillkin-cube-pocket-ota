@@ -135,6 +135,10 @@ python3 -m tools.macos_recover \
 同じprefixと一致するかを示します。このモードは`0x28`、FWデータ、`0x18`、
 `0x22`を送信しません。
 
+復旧を実行する場合はvendor new-flowどおり、`ff02`へ`0x28`を送信してから
+`ff01`へ`0x27`を送信し、offset/checksumがともに0であることを確認した後、
+GLOBAL FWを先頭から全量転送します。保持状態からのresumeは行いません。
+
 ```sh
 python3 -m tools.macos_recover \
   --firmware firmware/original/B077T_US_13.bin \

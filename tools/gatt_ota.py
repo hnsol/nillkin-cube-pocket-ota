@@ -709,21 +709,17 @@ class GattOtaEngine:
         try:
             await self._start_notifications()
             subscribed = True
+            await self._write(
+                self._retransmit, pixart_ota.build_retransmit(), response=True
+            )
             state = await self._read_state(len(data))
             self.last_state = state
             self._validate_payload_transport(state)
-            if not self.resume_matches(data, state):
-                await self._write(
-                    self._retransmit, pixart_ota.build_retransmit(), response=True
+            if state.offset != 0 or state.checksum != 0:
+                raise GattProtocolError(
+                    "retransmit did not clear resume state; "
+                    + self._state_diagnostics(state)
                 )
-                state = await self._read_state(len(data))
-                self.last_state = state
-                self._validate_payload_transport(state)
-                if state.offset != 0 or state.checksum != 0:
-                    raise GattProtocolError(
-                        "retransmit did not establish zero recovery state; "
-                        + self._state_diagnostics(state)
-                    )
             await self._run_transfer(data, state)
             primary_failed = False
             return state
