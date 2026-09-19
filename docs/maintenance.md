@@ -83,7 +83,7 @@ JP_LANGなら`0xEC29`）を報告するようになり、`--accept-installed-glo
   `--accept-installed-global-signature`を使ってください。
 - **書き込んだTOMLは必ず保管してください。** 保管していないと、稼働中のFWをこのgateで
   認識できません。
-- この経路はunit testのみで検証済みで、2026-09-19時点で実機未検証です。
+- 固定JP_LANGでのJP_LANG → GLOBAL → JP_LANG往復を実機検証済み。独自TOMLの再書込みは未検証。
 
 ## checkpointの読み方
 
